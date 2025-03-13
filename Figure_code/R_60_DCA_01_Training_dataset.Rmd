@@ -1,0 +1,77 @@
+---
+html_document: default
+author: "Wei"
+date: '2024-09-26'
+output:
+  html_document:
+    df_print: paged
+title: "receiver operating characteristic curve (ROC curve)"
+---
+
+# 1. loading library and function
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(ggbeeswarm))
+suppressPackageStartupMessages(library(pacman))
+pacman::p_load(tidyverse,ggpubr,rstatix,ggsci,ggsignif,reshape2)
+suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(rmda))
+suppressPackageStartupMessages(library(stringr))
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+# 2. loading data
+```{r}
+Clinical <- read_rds("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/31_Clinical_information/GC_Clinical_info_20240925.rds")
+
+cv1 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv1.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv1)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv2 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv2.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv2)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv3 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv3.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv3)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv4 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv4.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv4)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv5 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv5.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv5)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv6 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv6.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv6)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv7 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv7.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv7)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv8 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv8.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv8)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv9 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv9.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv9)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv10 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv10.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv10)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+Training_Dataset <- bind_rows(cv1, cv2, cv3, cv4, cv5, cv6, cv7, cv8, cv9, cv10)
+
+```
+
+# 3. data processed
+## 3.1 创建模型
+```{r}
+dca_model <- decision_curve(actual ~ predicted_prob, 
+                            data = Training_Dataset, 
+                            family = binomial(link = 'logit'), 
+                            thresholds = seq(0, 1, by = 0.01), 
+                            confidence.intervals = 0.95)
+
+```
+
+## 3.2 绘制DCA曲线
+```{r}
+pdf("20240926_01_Training_DCA_v1.pdf", height=6, width=8)
+plot_decision_curve(dca_model, 
+                    curve.names = "DCA for Model", 
+                    col = c("#d62a56"),
+                    legend.position = "bottomleft")
+dev.off()
+
+```
+

@@ -1,0 +1,112 @@
+---
+html_document: default
+author: "Wei"
+date: '2024-09-25'
+output:
+  html_document:
+    df_print: paged
+title: "receiver operating characteristic curve (ROC curve)"
+---
+
+# 1. loading library and function
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(ggbeeswarm))
+suppressPackageStartupMessages(library(pacman))
+pacman::p_load(tidyverse,ggpubr,rstatix,ggsci,ggsignif,reshape2)
+suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+# 2. loading data
+```{r}
+Clinical <- read_rds("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/31_Clinical_information/GC_Clinical_info_20240925.rds")
+
+IVD_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/Internal_val.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(IVD_data)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+```
+
+# 3. data processed
+## 3.1 length
+```{r}
+# data_length <- Clinical %>% 
+#   select(Sample, Mean_length, Median_length, MEAN_INSERT_SIZE, MEDIAN_INSERT_SIZE)
+
+```
+
+## 3.2 coverage
+```{r}
+# data_Coverage <- Clinical %>% 
+#   select(Depth, Coverage)
+
+```
+
+## 3.3 join
+```{r}
+join_Clinical <- Clinical %>%
+  select(Sample, Mean_length, Median_length, MEAN_INSERT_SIZE, MEDIAN_INSERT_SIZE, Depth, Coverage, Disease_Group)
+
+join_IVD_data_Clinical <- IVD_data %>% 
+  left_join(join_Clinical, by = c("Sample" = "Sample")) %>% 
+  dplyr::mutate(Group_predicted = case_when(predicted == 0 ~ "Non-GC",
+                                  predicted == 1 ~ "GC",
+                                  )) %>% 
+  distinct()
+
+```
+
+# 4. plot
+## 4.1 Cancer score (predicted_prob)
+```{r}
+summary(join_IVD_data_Clinical[join_IVD_data_Clinical$Group_predicted=="Non-GC",]$predicted_prob)
+summary(join_IVD_data_Clinical[join_IVD_data_Clinical$Group_predicted=="GC",]$predicted_prob)
+p <- wilcox.test(join_IVD_data_Clinical[join_IVD_data_Clinical$Group_predicted=="Non-GC",]$predicted_prob,join_IVD_data_Clinical[join_IVD_data_Clinical$Group_predicted=="GC",]$predicted_prob)
+p$p.value
+
+boxplot_CancerScore <- data.frame(join_IVD_data_Clinical) %>%
+  select(Group_predicted, predicted_prob)
+
+boxplot_CancerScore$Group_predicted=factor(boxplot_CancerScore$Group_predicted, levels=c('Non-GC', 'GC'))
+
+pdf("20240925_cfDNA_02_Cancer_score_boxplot_v1.pdf", height=5.5, width=5.5)
+ggplot(boxplot_CancerScore,aes(x=Group_predicted,y=predicted_prob,fill=factor(Group_predicted),color=factor(Group_predicted)))+
+  # geom_violin(width=0.45, size = 1)+
+  geom_boxplot(width=0.3, size = 1)+
+  geom_quasirandom(width=0.1, varwidth=TRUE, cex=2, method="quasirandom")+
+  scale_y_continuous(expand = ggplot2::expansion(mult = c(0.1, 0.1)))+
+  # geom_jitter(width=0.1)+
+  geom_signif(comparisons = list(c("Non-GC", "GC")),
+              map_signif_level = T,
+              textsize = 8,
+              test = "wilcox.test",
+              step_increase = 0.1,
+              color = "#000000")+
+  annotate("text", x=1.32, y=median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="Non-GC",]$predicted_prob), label=sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="Non-GC",]$predicted_prob)), color = "#000000", size = 8)+
+  annotate("text", x=2.32, y=median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="GC",]$predicted_prob), label=sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="GC",]$predicted_prob)), color = "#000000", size = 8)+
+  #scale_y_log10()+
+  # ylim(0.5,1.05)+
+  theme_classic()+
+  theme(legend.position="NA")+
+  scale_fill_manual(values=c("#FFFFFF", "#FFFFFF"))+
+  scale_color_manual(values=c("#007fff", "#ff8033"))+
+  labs(x="", y="Cancer Score", title="", fill = "") +
+  # theme(legend.text = element_text(size=15),
+  #       legend.title = element_text(face="bold", color="black", size=15))+
+  theme(panel.grid = element_blank(), axis.title = element_text(size = 15))+
+  theme(plot.title = element_text(face="bold", color="black", size=15, hjust = 0.5))+
+  theme(axis.line = element_line(linewidth=0.5, colour="black"))+
+  theme(axis.ticks = element_line(linewidth=0.5, colour="black"), axis.ticks.length=unit(0.5, "lines"))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold", color="black", size=15))
+dev.off()
+
+```
+

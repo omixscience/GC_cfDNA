@@ -1,0 +1,355 @@
+---
+title: "Clinical_information"
+author: "Wei"
+date: '2024-09-25'
+output: pdf_document
+html_document: default
+---
+
+# 1. loading library and function
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+# 2. loading data
+```{r}
+# Clinical <- read.xlsx("/Users/xuewei/ZxProjects/20240401_GC_cfDNA/00_backup/GC_20240401_566_v3_xw.xlsx", sheet = 1, skipEmptyRows = FALSE)
+Clinical <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/00_backup/20240612-876-samples-groupA.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+
+```
+
+# 3. data processed
+## 3.1 Gender
+```{r}
+Clinical <- Clinical %>% 
+  mutate(Sample = GCID) %>% 
+  select(-GCID)
+
+Clinical2 <- Clinical %>% 
+  mutate(Gender = str_replace_all(gender, 
+                                  c("(?i)male" = "Male", 
+                                    "(?i)female" = "Female"))) %>%
+  select(-gender)
+
+```
+
+## 3.2 Age
+```{r}
+Clinical3 <- Clinical2 %>% 
+  mutate(Age = age) %>% 
+  select(-age)
+
+```
+
+## 3.3 Training and validation set 
+```{r}
+Clinical4 <- Clinical3 %>% 
+  mutate(Dataset = str_replace_all(group, c("1-train" = "01_Training", 
+                                            "2-in-test" = "02_Internal",
+                                            "3-ex-test" = "03_External"
+                                            ))) %>% 
+  select(-group)
+
+```
+
+## 3.4 使用case_when()函数将 "生存" 改为 0，"死亡" 改为 1，NA 不变
+```{r}
+Clinical5 <- Clinical4 %>% 
+  # dplyr::mutate(OS_status = 状态) %>%
+  dplyr::mutate(OS_status = case_when(
+    状态 == "生存" ~ 0,
+    状态 == "死亡" ~ 1
+    )) %>% 
+  select(-状态) %>% 
+  mutate(OS_status = replace_na(OS_status, "Unknown"))
+colnames(Clinical5)[colnames(Clinical5)=="生存时间（月）"] <- "OS_time"
+
+```
+
+## 3.5 使用case_when()函数将 吸烟史.（吸烟1/不吸烟2/戒烟3） 转换
+```{r}
+Clinical6 <- Clinical5 %>%
+  mutate(Smoking_History = case_when(
+    `吸烟史（吸烟1/不吸烟2/戒烟3）` == 1 ~ "Smoking",
+    `吸烟史（吸烟1/不吸烟2/戒烟3）` == 2 ~ "Non-smoking",
+    `吸烟史（吸烟1/不吸烟2/戒烟3）` == 3 ~ "Quit-smoking",
+    # TRUE ~ as.character("吸烟史.（吸烟1/不吸烟2/戒烟3）")  # 其他情况保持原值
+  )) %>% 
+  select(-`吸烟史（吸烟1/不吸烟2/戒烟3）`)
+
+```
+
+## 3.6 使用case_when()函数将 饮酒史.（饮酒1/不饮酒2/戒酒3 ）转换
+```{r}
+Clinical7 <- Clinical6 %>%
+  mutate(Drinking_History = case_when(
+    `饮酒史（饮酒1/不饮酒2/戒酒3）` == 1 ~ "Drinking",
+    `饮酒史（饮酒1/不饮酒2/戒酒3）` == 2 ~ "Non-drinking",
+    `饮酒史（饮酒1/不饮酒2/戒酒3）` == 3 ~ "Quit-drinking",
+    # TRUE ~ as.character("饮酒史.（饮酒1/不饮酒2/戒酒3 ）")  # 其他情况保持原值
+  )) %>% 
+  select(-`饮酒史（饮酒1/不饮酒2/戒酒3）`)
+
+```
+
+## 3.7 使用case_when()函数将 是否有.家族史（是1/否2）转换
+```{r}
+Clinical8 <- Clinical7 %>% 
+  mutate(Family_History = `是否有家族史（是1/否2）`) %>% 
+  mutate(Family_History = case_when(
+    Family_History == "2" ~ "No",
+    is.na(Family_History) | Family_History == "/" ~ Family_History,
+    TRUE ~ "Yes"  # 其他情况改为 "Yes"
+  )) %>% 
+  select(-`是否有家族史（是1/否2）`)
+
+```
+
+## 3.8 临床诊断
+```{r}
+Clinical9 <- Clinical8 %>% 
+  mutate(Clinical_Diagnosis = 临床诊断) %>% 
+  select(-临床诊断)
+
+Clinical9 <- Clinical9 %>%
+  mutate(Clinical_Diagnosis = case_when(
+    grepl("胃|良性肿瘤", Clinical_Diagnosis) ~ "Gastric",
+    Clinical_Diagnosis == "体检H" ~ "Physical_examination",
+    TRUE ~ "Non-gastric"  # 其他情况改为 "Non-gastric"
+  ))
+
+```
+
+## 3.9 status
+```{r}
+Clinical10 <- Clinical9 %>% 
+  mutate(Disease_Group = status) %>% 
+  select(-status)
+
+Clinical10 <- Clinical10 %>%
+  mutate(Disease_Group = case_when(
+    grepl("malignant", Disease_Group) ~ "Malignant",
+    grepl("benign", Disease_Group) ~ "Benign",
+    grepl("benign ", Disease_Group) ~ "Benign",
+    TRUE ~ Disease_Group  # 其他情况保持不变
+  ))
+
+```
+
+## 3.10 临床分期
+```{r}
+Clinical11 <- Clinical10 %>% 
+  mutate(Stage = 临床分期) %>% 
+  select(-临床分期)
+
+Clinical11 <- Clinical11 %>%
+  mutate(Stage = case_when(
+    Stage == "/" ~ "Undetermined",
+    Stage == "1" | Stage == "I期" ~ "I",
+    Stage == "2" | Stage == "II期" ~ "II",
+    Stage == "3" | Stage == "III期" ~ "III",
+    Stage == "4" | Stage == "IV期" ~ "IV",
+    TRUE ~ Stage  # 其他情况保持不变
+  ))
+
+```
+
+## 3.11 分化程度
+```{r}
+Clinical12 <- Clinical11 %>% 
+  mutate(Differentiation = 分化程度) %>% 
+  select(-分化程度)
+
+Clinical12 <- Clinical12 %>%
+  mutate(Differentiation = case_when(
+    Differentiation == "/" ~ "Undetermined",
+    grepl("中-低分化|中低分化", Differentiation) ~ "Low_Mid",
+    Differentiation == "中-高分化" ~ "Low_High",
+    Differentiation == "中高分化" ~ "Low_High",
+    Differentiation == "中分化" ~ "Mid",
+    Differentiation == "中-低" ~ "Mid_Low",
+    Differentiation == "中" ~ "Mid",
+    Differentiation == "低分化" ~ "Low",
+    grepl("高-中分化|高中分化|高-中", Differentiation) ~ "High_Mid",
+    Differentiation == "高分化" ~ "High",
+    Differentiation == "高" ~ "High",
+    TRUE ~ Differentiation  # 其他情况保持不变
+  ))
+
+Clinical12 <- Clinical12 %>% 
+  mutate(Differentiation = case_when(Differentiation == "High" ~ "High",
+                                     Differentiation == "High_Mid" ~ "High",
+                                     Differentiation == "Mid" ~ "Mid",
+                                     Differentiation == "Mid_Low" ~ "Mid",
+                                     Differentiation == "Low" ~ "Low",
+                                     Differentiation == "Low_High" ~ "Low",
+                                     Differentiation == "Low_Mid" ~ "Low",
+                                     Differentiation == "Undetermined" ~ "Undetermined",
+  ))
+
+```
+
+## 3.12 hMLH1, hMSH2, hMSH6, PMS2 阳性个数
+```{r}
+Clinical13 <- Clinical12 %>% 
+  mutate(MMR_num = 阳性个数) %>% 
+  mutate(MSS_Group = case_when(MMR_num == '4' ~ "MSS",
+                               MMR_num == '0' ~ "MSI-H",
+                               MMR_num == '1' ~ "MSI-H",
+                               MMR_num == '2' ~ "MSI-H",
+                               MMR_num == '3' ~ "MSI-H",
+  )) %>% 
+  mutate(MSS_Group = replace_na(MSS_Group, "Unknown"))
+
+Clinical13 <- Clinical13 %>%
+  mutate(MMR = str_replace_all(MMR, "0", "dMMR")) %>% 
+  mutate(MMR = str_replace_all(MMR, "1", "pMMR")) %>% 
+  mutate(MMR_Group = case_when(MMR == 'dMMR' ~ "dMMR",
+                               MMR == 'pMMR' ~ "pMMR",
+  )) %>% 
+  mutate(MMR_Group = replace_na(MMR_Group, "Unknown"))
+
+```
+
+## 3.13 HER2
+```{r}
+Clinical14 <- Clinical13 %>% 
+  mutate(HER2_Status = HER2)
+
+Clinical14 <- Clinical14 %>%
+  mutate(HER2_Status = case_when(
+    HER2_Status == "/" ~ "Undetermined",
+    HER2_Status == "阴性" ~ "HER2-",
+    HER2_Status == "0" ~ "HER2-",
+    HER2_Status == "1+" ~ "HER2-",
+    HER2_Status == "2+" ~ "HER2+",
+    HER2_Status == "3+" ~ "HER2+",
+    TRUE ~ HER2_Status  # 其他情况保持不变
+  ))
+
+```
+
+## 3.14 CEA, CA199, AFP（<=8.78ng/ml）, CA125(<=35.00U/ml), CA242(<=20.00U/ml), CA724(<=6.90U/ml) [CEA<=5.00ng/ml，CA199<=37.00U/ml，AFP<=8.78ng/ml, CA125<=35.00U/ml, CA242<=20.00U/ml, CA724<=6.90U/ml]
+```{r}
+Clinical15 <- Clinical14 %>% 
+  mutate(AFP = `AFP(＜=8.7ng/ml)`) %>% 
+  mutate(CA125 = `CA125(＜=35.00U/ml）`) %>% 
+  mutate(CA242 = `CA242(＜=20.00U/ml)`) %>% 
+  mutate(CA724 = `CA724(＜=6.90U/ml)`) %>% 
+  select(-`AFP(＜=8.7ng/ml)`, -`CA125(＜=35.00U/ml）`, -`CA242(＜=20.00U/ml)`, - `CA724(＜=6.90U/ml)`)
+
+```
+
+## 3.15 Tumor location
+```{r}
+Clinical16 <- Clinical15 %>% 
+  mutate(Tumor_Location01 = `发病部位1`) %>% 
+  mutate(Tumor_Location02 = `发病部位2`) %>% 
+  select(-`发病部位1`, -`发病部位2`)
+
+```
+
+## 3.20 ranking
+```{r}
+Clinical20 <- Clinical16 %>% 
+  select(Sample, Gender, Age, Stage, Disease_Group, OS_status, OS_time, MMR, MMR_num, MMR_Group, MSS_Group, HER2_Status, Smoking_History, Drinking_History, Family_History, Clinical_Diagnosis, Differentiation, CEA, CA199, AFP, CA125, CA242, CA724, Mean_length, Median_length, MEAN_INSERT_SIZE, MEDIAN_INSERT_SIZE, Dataset, everything())
+
+write_rds(Clinical20, "GC_Clinical_info_20240925.rds")
+
+```
+
+## 3.21 MSI
+```{r}
+table(Clinical16$MSS_Group)
+
+```
+
+
+# 4. Table_info
+```{r}
+Clinical20 <- read_rds("GC_Clinical_info_20240925.rds")
+
+Table_info01 <- Clinical20 %>% 
+  select(Sample, Gender, Age, Stage, Disease_Group, MMR_Group, MSS_Group, HER2_Status, Smoking_History, Drinking_History, Family_History, Differentiation)
+
+write.table(Table_info01, file="GC_Table_info_20240925.txt", sep = "\t", quote=F, row.names = F, col.names = T)
+
+```
+
+## 4.1 table1
+```{r}
+# 安装和加载tableone包
+# if(!require(tableone)) install.packages("tableone")
+library(tableone)
+
+# 加载readr包来读取CSV文件
+# if(!require(readr)) install.packages("readr")
+library(readr)
+
+# 读取数据
+data <- read.csv("GC_Table_info_20240925.txt", sep = "\t", h = T, check.names = F)
+
+# 创建Table 1
+# 首先指定哪些变量是分类的，哪些是连续的
+categoricalVars <- c("Gender", "Stage", "Disease_Group", "Smoking_History", "Drinking_History", "Family_History", "Differentiation", "MMR_Group", "MSS_Group", "HER2_Status", "MMR")
+continuousVars <- c("Age")
+
+# 使用CreateTableOne创建表格
+table1 <- CreateTableOne(vars = categoricalVars, strata = "Disease_Group", data = data, factorVars = categoricalVars)
+
+# 打印表格
+print(table1)
+
+```
+
+## 4.2 save Table1
+```{r}
+table2 <- print(table1, #构建的table函数（包括条件1.2）
+                showAllLevels=TRUE, #显示所有变量
+                nonnormal = nonvar) #条件3
+write.csv(table2, file = "Table1_v1.csv")
+
+table3 <- print(table1, #构建的table函数（带条件1.2.3）
+                nonnormal = nonvar,#条件4
+                #exact = exactvars, #条件5
+                catDigits = 2, contDigits = 3, pDigits = 4, #附加条件
+                showAllLevels=TRUE, #显示所有变量
+                quote = FALSE, # 不显示引号
+                noSpaces = TRUE, # #删除用于对齐的空格
+                printToggle = TRUE) #展示输出结果*`
+write.csv(table3, file = "Table1_v2.csv")
+
+```
+
+
+```{r}
+print(table1)
+
+```
+
+```{r}
+print(table2)
+
+```
+
+```{r}
+print(table3)
+
+```
+
+
+
+```{r}
+subtype <- Clinical20 %>% 
+  select(Sample, OS_status, OS_time, MSS_Group, HER2_Status)
+
+write.table(subtype, file="GC_subtype_20240925.txt", sep = "\t", quote=F, row.names = F, col.names = T)
+
+```
+

@@ -1,0 +1,2103 @@
+---
+html_document: default
+author: "Wei"
+date: '2024-09-25'
+output:
+  html_document:
+    df_print: paged
+title: "receiver operating characteristic curve (ROC curve)"
+---
+
+# 1. loading library and function
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ROCR))
+suppressPackageStartupMessages(library(pROC))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(ggbeeswarm))
+suppressPackageStartupMessages(library(pacman))
+pacman::p_load(tidyverse,ggpubr,rstatix,ggsci,ggsignif,reshape2)
+suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+# 2. loading data
+```{r}
+Clinical <- read_rds("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/31_Clinical_information/GC_Clinical_info_20240925.rds")
+
+# data_feature <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/00_backup/20240618-all-features.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(data_feature)[colnames(data_feature)=="GCID"] <- "Sample"
+
+cv1 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv1.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv1)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv2 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv2.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv2)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv3 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv3.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv3)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv4 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv4.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv4)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv5 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv5.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv5)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv6 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv6.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv6)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv7 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv7.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv7)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv8 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv8.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv8)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv9 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv9.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv9)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv10 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv10.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv10)<-c("predicted", "predicted_prob", "actual", "Sample")
+Training_dataset <- bind_rows(cv1, cv2, cv3, cv4, cv5, cv6, cv7, cv8, cv9, cv10)
+
+IVD_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/Internal_val.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(IVD_data)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+EVD_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/External_val.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(EVD_data) <- c("predicted", "predicted_prob", "actual", "Sample")
+
+join_data <- bind_rows(Training_dataset, IVD_data, EVD_data) %>% 
+  distinct()
+
+```
+
+# 3. data processed
+## 3.1 join
+```{r}
+join_data_Clinical <- join_data %>% 
+  left_join(Clinical, by = c("Sample" = "Sample")) %>% 
+  dplyr::mutate(Group_predicted = case_when(predicted == 0 ~ "Benign",
+                                            predicted == 1 ~ "Malignant",
+                                  )) %>% 
+  distinct()
+
+join_data_feature <- join_data_Clinical
+
+# join_data_feature <- join_data_Clinical %>% 
+#   left_join(data_feature, by = c("Sample" = "Sample")) %>% 
+#   distinct()
+
+```
+
+# 10. plot
+## 10.1 HER2
+```{r}
+# join_data_feature %>%
+#   group_by(HER2) %>%
+#   summarise(count = n())
+data_HER2 <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, HER2, HER2_Status, Disease_Group, Group_predicted) %>% 
+  mutate(HER2_Status = replace_na(HER2_Status, "Undetermined"))
+
+data_HER23 <- data_HER2 %>% 
+  filter(str_detect(HER2_Status, "Undetermined", negate = TRUE)) %>%
+  filter(HER2_Status != "NA")
+# data_Stage3 <- data_Stage3[complete.cases(data_Stage3$HER2_Status), ]
+
+data_HER24 <- data_HER2 %>% 
+  select(Sample, HER2_Status)
+# write.csv(data_HER24, "data_HER2_491.csv")
+
+```
+
+## 10.2 select bengin and malignant
+```{r}
+data_HER2_bengin <- data_HER2 %>% 
+  filter(actual == 0)
+
+data_neg <- data_HER23 %>% 
+  filter(actual == 1 & HER2_Status == "HER2-")
+data_pos <- data_HER23 %>% 
+  filter(actual == 1 & HER2_Status == "HER2+")
+
+join_bengin_neg <- bind_rows(data_HER2_bengin, data_neg)
+join_bengin_pos <- bind_rows(data_HER2_bengin, data_pos)
+
+join_bengin_all <- bind_rows(data_HER2_bengin, join_bengin_neg, join_bengin_pos) %>% 
+  distinct()
+
+```
+
+
+# 11. join_bengin_neg
+## 11.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_neg$predicted <- factor(join_bengin_neg$predicted, levels = c(0, 1))
+join_bengin_neg$actual <- factor(join_bengin_neg$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_neg$predicted, join_bengin_neg$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_neg$actual, join_bengin_neg$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+neg_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(neg_Sensi) <- c("Sensitivity")
+neg_Sensi <- neg_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "HER-"))
+
+```
+
+## 11.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_neg$predicted_prob, join_bengin_neg$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_neg$actual)
+
+pdf('20240925_01_HER2_neg_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+## 11.3 Confusion Matrix heatmap
+```{r}
+conf_matrix_df <- as.data.frame(conf_matrix$table)
+
+conf_matrix_df$Prediction <- factor(conf_matrix_df$Prediction, levels = c("0", "1"))
+
+pdf('20240925_01_HER2_neg_Heatmap_v1.pdf', width = 8, height = 6)
+ggplot(data = conf_matrix_df, aes(x = Prediction, y = Reference)) +
+  geom_tile(aes(fill = Freq), color = "#FFFFFF") +
+  geom_text(aes(label = Freq), vjust = 1, size = 10) + # 调整数字的大小为15
+  scale_fill_gradient(low = "#FFFFFF", high = "#9acd32") +
+  theme_minimal() +
+  labs(title = "HER2-", x = "Predicted", y = "Actual") +
+  scale_x_discrete(labels=c("0"="Benign", "1"="Malignant")) +
+  scale_y_discrete(labels=c("0"="Benign", "1"="Malignant")) +
+  theme(legend.position = "right",
+        legend.title = element_text(face = "bold", size = 15),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold", size = 20),  # 调整轴标题字号
+        axis.text.x = element_text(face = "bold", color = "black", size = 20),  # 调整x轴标签字号
+        axis.text.y = element_text(face = "bold", color = "black", size = 20),  # 调整y轴标签字号
+        plot.title = element_text(face = "bold", color = "black", size = 20))  # 调整图标题字号
+
+dev.off()
+
+```
+
+
+# 12. join_bengin_pos
+## 12.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_pos$predicted <- factor(join_bengin_pos$predicted, levels = c(0, 1))
+join_bengin_pos$actual <- factor(join_bengin_pos$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_pos$predicted, join_bengin_pos$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_pos$actual, join_bengin_pos$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+pos_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(pos_Sensi) <- c("Sensitivity")
+pos_Sensi <- pos_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "HER+"))
+
+```
+
+## 12.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_pos$predicted_prob, join_bengin_pos$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_pos$actual)
+
+pdf('20240925_01_HER2_pos_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+## 13.3 Confusion Matrix heatmap
+```{r}
+conf_matrix_df <- as.data.frame(conf_matrix$table)
+
+conf_matrix_df$Prediction <- factor(conf_matrix_df$Prediction, levels = c("0", "1"))
+
+pdf('20240925_01_HER2_pos_Heatmap_v1.pdf', width = 8, height = 6)
+ggplot(data = conf_matrix_df, aes(x = Prediction, y = Reference)) +
+  geom_tile(aes(fill = Freq), color = "#FFFFFF") +
+  geom_text(aes(label = Freq), vjust = 1, size = 10) + # 调整数字的大小为15
+  scale_fill_gradient(low = "#FFFFFF", high = "#ed3c3c") +
+  theme_minimal() +
+  labs(title = "HER2+", x = "Predicted", y = "Actual") +
+  scale_x_discrete(labels=c("0"="Benign", "1"="Malignant")) +
+  scale_y_discrete(labels=c("0"="Benign", "1"="Malignant")) +
+  theme(legend.position = "right",
+        legend.title = element_text(face = "bold", size = 15),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold", size = 20),  # 调整轴标题字号
+        axis.text.x = element_text(face = "bold", color = "black", size = 20),  # 调整x轴标签字号
+        axis.text.y = element_text(face = "bold", color = "black", size = 20),  # 调整y轴标签字号
+        plot.title = element_text(face = "bold", color = "black", size = 20))  # 调整图标题字号
+
+dev.off()
+
+```
+
+
+# 13. Sensitivity
+## 13.1 Percentage of Benign and Malignant
+```{r}
+join_sensitivity <- bind_rows(neg_Sensi, pos_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c('HER-', "HER+"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_HER2_barplot_v1.png", plot_join_bengin_all, height=5.5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+# # 计算每个组的百分比
+# sample_group <- join_bengin_all %>%
+#   group_by(Stage_Group, Group_predicted) %>% 
+#   summarise(Count = n()) %>%
+#   mutate(Percentage = Count / sum(Count) * 100)
+# 
+# sample_group$Group_predicted=factor(sample_group$Group_predicted, levels=c("Benign", "Malignant"))
+# sample_group$Stage_Group=factor(sample_group$Stage_Group, levels=c("Low", "High"))
+# 
+# # 绘制barplot
+# plot_join_bengin_all <- ggplot(sample_group, aes(x = Stage_Group, y = Percentage, fill = Group_predicted)) +
+#   geom_bar(stat = "identity", width = 0.6, title= "") +
+#   labs(y = "Percentage (%)", x = NULL) +
+#   theme_classic() +
+#   # scale_y_continuous(expand = c(0.01,0)) +
+#   scale_fill_manual(values=c("#845EC2", "#FFC75F")) +
+#   theme(legend.position = "right", legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+#   theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+#   theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+#   theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=12),
+#         axis.text.y = element_text(face="bold", color="black", size=12),
+#         axis.title.x = element_text(face="bold", color="black", size=12),
+#         axis.title.y = element_text(face="bold",color="black", size=12))
+# ggsave("20240313_responder_barplot_v2.png", plot_TIDEscore_Responder, height=5, width=5, dpi = 300)
+# 
+# chisq.test(table(sample_group$Stage_Group, sample_group$Group_predicted))
+
+```
+
+
+## 13.2 Cancer score (predicted_prob)
+```{r}
+# # summary(join_bengin_all[join_bengin_all$Stage_Group=="Benign",]$predicted_prob)
+# summary(join_bengin_all[join_bengin_all$Stage_Group=="Low",]$predicted_prob)
+# summary(join_bengin_all[join_bengin_all$Stage_Group=="High",]$predicted_prob)
+# # p <- wilcox.test(join_bengin_all[join_bengin_all$Stage_Group=="Benign",]$predicted_prob,join_bengin_all[join_bengin_all$Stage_Group=="Low",]$predicted_prob)
+# # p$p.value
+# # p <- wilcox.test(join_bengin_all[join_bengin_all$Stage_Group=="Benign",]$predicted_prob,join_bengin_all[join_bengin_all$Stage_Group=="Mid",]$predicted_prob)
+# # p$p.value
+# p <- wilcox.test(join_bengin_all[join_bengin_all$Stage_Group=="Low",]$predicted_prob,join_bengin_all[join_bengin_all$Stage_Group=="High",]$predicted_prob)
+# p$p.value
+# 
+# boxplot_CancerScore <- data.frame(join_bengin_all) %>%
+#   select(Stage_Group, predicted_prob)
+# 
+# boxplot_CancerScore$Stage_Group=factor(boxplot_CancerScore$Stage_Group, levels=c('Benign', 'Low', 'Mid', 'High'))
+# 
+# pdf("20240410_cfDNA_06_Stage_Group_Cancer_score_boxplot_v1.pdf", height=5.5, width=6)
+# ggplot(boxplot_CancerScore, aes(x = Stage_Group, y = predicted_prob, fill = factor(Stage_Group), color = factor(Stage_Group))) +
+#   geom_boxplot(width = 0.3, size = 1) +
+#   geom_quasirandom(width = 0.1, varwidth = TRUE, cex = 2, method = "quasirandom") +
+#   scale_y_continuous(expand = ggplot2::expansion(mult = c(0.1, 0.1))) +
+#   stat_compare_means(comparisons = list(c("Benign", "Low"), c("Low", "Mid"), c("Mid", "High"), c("Benign", "Mid"), c("Low", "High"), c("Benign", "High")),
+#                      method = "wilcox.test",
+#                      label = "p.format", # p.signif
+#                      hide.ns = TRUE,
+#                      textsize = 5,
+#                      step.increase = 0.1,
+#                      label.x.npc = "right",
+#                      size = 4) +
+#   annotate("text", x = 1.32, y = median(boxplot_CancerScore[boxplot_CancerScore$Stage_Group == "Benign", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Stage_Group == "Benign", ]$predicted_prob)), color = "#000000", size = 5) +
+#   annotate("text", x = 2.32, y = median(boxplot_CancerScore[boxplot_CancerScore$Stage_Group == "Low", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Stage_Group == "Low", ]$predicted_prob)), color = "#000000", size = 5) +
+#   annotate("text", x = 3.32, y = median(boxplot_CancerScore[boxplot_CancerScore$Stage_Group == "Mid", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Stage_Group == "Mid", ]$predicted_prob)), color = "#000000", size = 5) +
+#   annotate("text", x = 4.32, y = median(boxplot_CancerScore[boxplot_CancerScore$Stage_Group == "High", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Stage_Group == "High", ]$predicted_prob)), color = "#000000", size = 5) +
+#   theme_classic() +
+#   theme(legend.position = "NA") +
+#   scale_fill_manual(values = c("#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF")) +
+#   scale_color_manual(values = c("#007fff", "#9acd32", "#12c3c3", "#ed3c3c")) +
+#   labs(x = "", y = "Cancer Score", title = "", fill = "") +
+#   theme(panel.grid = element_blank(), axis.title = element_text(size = 15)) +
+#   theme(plot.title = element_text(face = "bold", color = "black", size = 15, hjust = 0.5)) +
+#   theme(axis.line = element_line(linewidth = 0.5, colour = "black")) +
+#   theme(axis.ticks = element_line(linewidth = 0.5, colour = "black"), axis.ticks.length = unit(0.5, "lines")) +
+#   theme(axis.text.x = element_text(face = "bold", color = "black", size = 15),
+#         axis.text.y = element_text(face = "bold", color = "black", size = 15),
+#         axis.title.x = element_text(face = "bold", color = "black", size = 15),
+#         axis.title.y = element_text(face = "bold", color = "black", size = 15))
+# dev.off()
+
+```
+
+
+# 20. plot
+## 20.1 MMR
+```{r}
+# join_data_feature %>%
+#   group_by(MMR) %>%
+#   summarise(count = n())
+
+data_MMR <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, MMR, MMR_Group, Disease_Group, Group_predicted) %>% 
+  mutate(MMR_Group = replace_na(MMR_Group, "Unknown"))
+
+data_MMR2 <- data_MMR[complete.cases(data_MMR$MMR_Group), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 20.2 select bengin and malignant
+```{r}
+data_MMR_bengin <- data_MMR %>% 
+  filter(actual == 0)
+
+data_dMMR <- data_MMR2 %>% 
+  filter(actual == 1 & MMR_Group == "dMMR")
+data_pMMR <- data_MMR2 %>% 
+  filter(actual == 1 & MMR_Group == "pMMR")
+
+join_bengin_dMMR <- bind_rows(data_MMR_bengin, data_dMMR)
+join_bengin_pMMR <- bind_rows(data_MMR_bengin, data_pMMR)
+
+join_bengin_all <- bind_rows(data_MMR_bengin, data_dMMR, data_pMMR)
+
+```
+
+
+# 21. dMMR
+## 21.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_dMMR$predicted <- factor(join_bengin_dMMR$predicted, levels = c(0, 1))
+join_bengin_dMMR$actual <- factor(join_bengin_dMMR$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_dMMR$predicted, join_bengin_dMMR$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_dMMR$actual, join_bengin_dMMR$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+dMMR_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(dMMR_Sensi) <- c("Sensitivity")
+dMMR_Sensi <- dMMR_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "dMMR"))
+
+```
+
+## 21.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_dMMR$predicted_prob, join_bengin_dMMR$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_dMMR$actual)
+
+pdf('20240925_02_dMMR_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 22. pMMR
+## 22.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_pMMR$predicted <- factor(join_bengin_pMMR$predicted, levels = c(0, 1))
+join_bengin_pMMR$actual <- factor(join_bengin_pMMR$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_pMMR$predicted, join_bengin_pMMR$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_pMMR$actual, join_bengin_pMMR$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+pMMR_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(pMMR_Sensi) <- c("Sensitivity")
+pMMR_Sensi <- pMMR_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "pMMR"))
+
+```
+
+## 22.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_pMMR$predicted_prob, join_bengin_pMMR$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_pMMR$actual)
+
+pdf('20240925_02_pMMR_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 23. Sensitivity
+## 23.1 Percentage of Benign and Malignant
+```{r}
+join_sensitivity <- bind_rows(dMMR_Sensi, pMMR_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("dMMR", "pMMR"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_MMR_barplot_v1.png", plot_join_bengin_all, height=5.5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+
+# 30. plot
+## 30.1 MSS
+```{r}
+# join_data_feature %>%
+#   group_by(MSI) %>%
+#   summarise(count = n())
+
+data_MSS <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, MMR_num, MSI, MSS_Group, Disease_Group, Group_predicted) %>% 
+  mutate(MSS_Group = replace_na(MSS_Group, "Unknown"))
+
+data_MSS3 <- data_MSS %>% 
+  select(Sample, MSS_Group)
+# write.csv(data_MSS3, "data_MSS.csv")
+
+# data_MSS2 <- data_MSS %>% 
+#   filter(MSI != "/")
+data_MSS2 <- data_MSS[complete.cases(data_MSS$MSS_Group), ]
+
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 30.2 select bengin and malignant
+```{r}
+data_MSS_bengin <- data_MSS %>% 
+  filter(actual == 0)
+
+data_MSS <- data_MSS2 %>% 
+  filter(actual == 1 & MSS_Group == "MSS")
+data_MSH <- data_MSS2 %>% 
+  filter(actual == 1 & MSS_Group == "MSI-H")
+
+join_bengin_MSS <- bind_rows(data_MSS_bengin, data_MSS)
+join_bengin_MSH <- bind_rows(data_MSS_bengin, data_MSH)
+
+join_bengin_all <- bind_rows(data_MSS_bengin, data_MSS, data_MSH)
+
+```
+
+
+# 31. MSS
+## 31.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_MSS$predicted <- factor(join_bengin_MSS$predicted, levels = c(0, 1))
+join_bengin_MSS$actual <- factor(join_bengin_MSS$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_MSS$predicted, join_bengin_MSS$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_MSS$actual, join_bengin_MSS$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+MSS_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(MSS_Sensi) <- c("Sensitivity")
+MSS_Sensi <- MSS_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "MSS"))
+
+```
+
+## 31.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_MSS$predicted_prob, join_bengin_MSS$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_MSS$actual)
+
+pdf('20240925_03_MSS_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 32. MSS-H
+## 32.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_MSH$predicted <- factor(join_bengin_MSH$predicted, levels = c(0, 1))
+join_bengin_MSH$actual <- factor(join_bengin_MSH$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_MSH$predicted, join_bengin_MSH$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_MSH$actual, join_bengin_MSH$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+MSH_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(MSH_Sensi) <- c("Sensitivity")
+MSH_Sensi <- MSH_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "MSI-H"))
+
+```
+
+## 32.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_MSH$predicted_prob, join_bengin_MSH$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_MSH$actual)
+
+pdf('20240925_03_MSS-H_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 33. Sensitivity
+## 33.1 Percentage of Benign and Malignant
+```{r}
+join_sensitivity <- bind_rows(MSS_Sensi, MSH_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("MSS", "MSI-H"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_MSS_MSI-H_barplot_v1.png", plot_join_bengin_all, height=5.5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+
+
+# 40. plot
+## 40.1 Gender
+```{r}
+# join_data_feature %>%
+#   group_by(Gender) %>%
+#   summarise(count = n())
+
+data_Gender <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, Gender, Disease_Group, Group_predicted)
+data_Gender2 <- data_Gender %>%
+  filter(Gender != "/") %>% 
+  # mutate(Gender = str_replace_all(Gender, "<0.50", "0.499")) %>% 
+  mutate(Gender_Group = case_when(Gender == 'Female' ~ "Female",
+                                  Gender == 'Male' ~ "Male",
+  ))
+
+data_Gender2 <- data_Gender2[complete.cases(data_Gender2$Gender), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 40.2 select bengin and malignant
+```{r}
+data_Gender_bengin <- data_Gender %>% 
+  filter(actual == 0)
+
+data_Female <- data_Gender2 %>% 
+  filter(actual == 1 & Gender_Group == "Female")
+data_Male <- data_Gender2 %>% 
+  filter(actual == 1 & Gender_Group == "Male")
+
+join_bengin_Female <- bind_rows(data_Gender_bengin, data_Female)
+join_bengin_Male <- bind_rows(data_Gender_bengin, data_Male)
+
+join_bengin_all <- bind_rows(data_Gender_bengin, data_Female, data_Male)
+
+```
+
+
+# 41. Gender Female
+## 41.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Female$predicted <- factor(join_bengin_Female$predicted, levels = c(0, 1))
+join_bengin_Female$actual <- factor(join_bengin_Female$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Female$predicted, join_bengin_Female$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Female$actual, join_bengin_Female$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Female_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Female_Sensi) <- c("Sensitivity")
+Female_Sensi <- Female_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Female"))
+
+```
+
+## 41.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Female$predicted_prob, join_bengin_Female$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_Female$actual)
+
+pdf('20240925_04_Gender_Female_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Female") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 42. Gender Male
+## 42.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Male$predicted <- factor(join_bengin_Male$predicted, levels = c(0, 1))
+join_bengin_Male$actual <- factor(join_bengin_Male$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Male$predicted, join_bengin_Male$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Male$actual, join_bengin_Male$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Male_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Male_Sensi) <- c("Sensitivity")
+Male_Sensi <- Male_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Male"))
+
+```
+
+## 42.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Male$predicted_prob, join_bengin_Male$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_Male$actual)
+
+pdf('20240925_04_Gender_Male_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Male") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 43. Sensitivity
+## 43.1 Percentage of Benign and Malignant
+```{r}
+join_sensitivity <- bind_rows(Female_Sensi, Male_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("Female", "Male"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_Gender_barplot_v1.png", plot_join_bengin_all, height=5.5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+
+
+# 50. plot
+## 50.1 Age
+```{r}
+data_Age <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, Age, Disease_Group, Group_predicted)
+data_Age2 <- data_Age %>%
+  filter(Age != "/") %>% 
+  # mutate(Age = str_replace_all(Age, ">1000.00", "1000.001")) %>% 
+  mutate(Age_Group = case_when(Age >= 50 ~ ">= 50",
+                               Age < 50 ~ "< 50",
+  ))
+
+data_Age2 <- data_Age2[complete.cases(data_Age2$Age), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 50.2 select bengin and malignant
+```{r}
+data_Age_bengin <- data_Age %>% 
+  filter(actual == 0)
+
+data_Low <- data_Age2 %>% 
+  filter(actual == 1 & Age_Group == "< 50")
+data_High <- data_Age2 %>% 
+  filter(actual == 1 & Age_Group == ">= 50")
+
+join_bengin_Low <- bind_rows(data_Age_bengin, data_Low)
+join_bengin_High <- bind_rows(data_Age_bengin, data_High)
+
+join_bengin_all <- bind_rows(data_Age_bengin, data_Low, data_High)
+
+```
+
+
+# 51. Age Low
+## 51.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Low$predicted <- factor(join_bengin_Low$predicted, levels = c(0, 1))
+join_bengin_Low$actual <- factor(join_bengin_Low$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Low$predicted, join_bengin_Low$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Low$actual, join_bengin_Low$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Low_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Low_Sensi) <- c("Sensitivity")
+Low_Sensi <- Low_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "< 50"))
+
+```
+
+## 51.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Low$predicted_prob, join_bengin_Low$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_Low$actual)
+
+pdf('20240925_05_Age_Low_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 52. Age High
+## 52.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_High$predicted <- factor(join_bengin_High$predicted, levels = c(0, 1))
+join_bengin_High$actual <- factor(join_bengin_High$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_High$predicted, join_bengin_High$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_High$actual, join_bengin_High$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+High_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(High_Sensi) <- c("Sensitivity")
+High_Sensi <- High_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", ">= 50"))
+
+```
+
+## 52.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_High$predicted_prob, join_bengin_High$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_High$actual)
+
+pdf('20240925_05_Age_High_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 53. Sensitivity
+## 53.1 Percentage of Benign and Malignant
+```{r}
+join_sensitivity <- bind_rows(Low_Sensi, High_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("< 50", ">= 50"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_Age_barplot_v1.png", plot_join_bengin_all, height=5.5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+
+
+# 60. plot
+## 60.1 Smoking
+```{r}
+# join_data_feature %>%
+#   group_by(Smoking_History) %>%
+#   summarise(count = n())
+
+data_Smoking <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, Smoking_History, Disease_Group, Group_predicted) %>% 
+  mutate(Smoking_History = replace_na(Smoking_History, "Unknown"))
+data_Smoking2 <- data_Smoking %>%
+  filter(Smoking_History != "/") %>% 
+  mutate(Smoking_Group = case_when(Smoking_History == 'Non-smoking' ~ "No",
+                                   Smoking_History == 'Quit-smoking' ~ "Yes",
+                                   Smoking_History == 'Smoking' ~ "Yes",
+  ))
+
+data_Smoking2 <- data_Smoking2[complete.cases(data_Smoking2$Smoking_Group), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 60.2 select bengin and malignant
+```{r}
+data_Smoking_bengin <- data_Smoking %>% 
+  filter(actual == 0)
+
+data_Low <- data_Smoking2 %>% 
+  filter(actual == 1 & Smoking_Group == "No")
+data_High <- data_Smoking2 %>% 
+  filter(actual == 1 & Smoking_Group == "Yes")
+
+join_bengin_Low <- bind_rows(data_Smoking_bengin, data_Low)
+join_bengin_High <- bind_rows(data_Smoking_bengin, data_High)
+
+join_bengin_all <- bind_rows(data_Smoking_bengin, data_Low, data_High)
+
+```
+
+
+# 61. Smoking Low
+## 61.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Low$predicted <- factor(join_bengin_Low$predicted, levels = c(0, 1))
+join_bengin_Low$actual <- factor(join_bengin_Low$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Low$predicted, join_bengin_Low$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Low$actual, join_bengin_Low$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Low_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Low_Sensi) <- c("Sensitivity")
+Low_Sensi <- Low_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "No"))
+
+```
+
+## 61.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Low$predicted_prob, join_bengin_Low$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_Low$actual)
+
+pdf('20240925_06_Smoking_Low_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 62. Smoking High
+## 62.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_High$predicted <- factor(join_bengin_High$predicted, levels = c(0, 1))
+join_bengin_High$actual <- factor(join_bengin_High$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_High$predicted, join_bengin_High$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_High$actual, join_bengin_High$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+High_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(High_Sensi) <- c("Sensitivity")
+High_Sensi <- High_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Yes"))
+
+```
+
+## 62.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_High$predicted_prob, join_bengin_High$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_High$actual)
+
+pdf('20240925_06_Smoking_High_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 63. Sensitivity
+## 63.1 Percentage of Benign and Malignant
+```{r}
+join_sensitivity <- bind_rows(Low_Sensi, High_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("No", "Yes"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_Smoking_barplot_v1.png", plot_join_bengin_all, height=5.5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+
+# 70. plot
+## 70.1 Drinking
+```{r}
+# join_data_feature %>%
+#   group_by(Drinking_History) %>%
+#   summarise(count = n())
+
+data_Drinking <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, Drinking_History, Disease_Group, Group_predicted) %>% 
+  mutate(Drinking_History = replace_na(Drinking_History, "Unknown"))
+
+data_Drinking2 <- data_Drinking %>%
+  filter(Drinking_History != "/") %>% 
+  mutate(Drinking_Group = case_when(Drinking_History == 'Non-drinking' ~ "No",
+                                    Drinking_History == 'Quit-drinking' ~ "Yes",
+                                    Drinking_History == 'Drinking' ~ "Yes",
+  ))
+
+data_Drinking2 <- data_Drinking2[complete.cases(data_Drinking2$Drinking_History), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 70.2 select bengin and malignant
+```{r}
+data_Drinking_bengin <- data_Drinking %>% 
+  filter(actual == 0)
+
+data_Low <- data_Drinking2 %>% 
+  filter(actual == 1 & Drinking_Group == "No")
+data_High <- data_Drinking2 %>% 
+  filter(actual == 1 & Drinking_Group == "Yes")
+
+join_bengin_Low <- bind_rows(data_Drinking_bengin, data_Low)
+join_bengin_High <- bind_rows(data_Drinking_bengin, data_High)
+
+join_bengin_all <- bind_rows(data_Drinking_bengin, data_Low, data_High)
+
+```
+
+
+# 71. Drinking Low
+## 71.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Low$predicted <- factor(join_bengin_Low$predicted, levels = c(0, 1))
+join_bengin_Low$actual <- factor(join_bengin_Low$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Low$predicted, join_bengin_Low$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Low$actual, join_bengin_Low$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Low_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Low_Sensi) <- c("Sensitivity")
+Low_Sensi <- Low_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "No"))
+
+```
+
+## 71.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Low$predicted_prob, join_bengin_Low$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_Low$actual)
+
+pdf('20240925_07_Drinking_Low_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 72. Drinking High
+## 72.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_High$predicted <- factor(join_bengin_High$predicted, levels = c(0, 1))
+join_bengin_High$actual <- factor(join_bengin_High$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_High$predicted, join_bengin_High$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_High$actual, join_bengin_High$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+High_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(High_Sensi) <- c("Sensitivity")
+High_Sensi <- High_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Yes"))
+
+```
+
+## 72.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_High$predicted_prob, join_bengin_High$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Benign and Malignant count
+count <- table(join_bengin_High$actual)
+
+pdf('20240925_07_Drinking_High_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("Malignant: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Benign: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 73. Sensitivity
+## 73.1 Percentage of Benign and Malignant
+```{r}
+join_sensitivity <- bind_rows(Low_Sensi, High_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("No", "Yes"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_Drinking_barplot_v1.png", plot_join_bengin_all, height=5.5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+

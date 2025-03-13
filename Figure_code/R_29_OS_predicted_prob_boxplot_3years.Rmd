@@ -1,0 +1,249 @@
+---
+html_document: default
+author: "Wei"
+date: '2024-09-25'
+output:
+pdf_document: default
+title: "receiver operating characteristic curve (ROC curve)"
+---
+
+# 1. loading library and function
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ROCR))
+suppressPackageStartupMessages(library(pROC))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(ggbeeswarm))
+suppressPackageStartupMessages(library(pacman))
+pacman::p_load(tidyverse,ggpubr,rstatix,ggsci,ggsignif,reshape2)
+suppressPackageStartupMessages(library(tibble))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+# 2. loading data
+```{r}
+cv1 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-cv1.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv1)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv2 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-cv2.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv2)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv3 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-cv3.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv3)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv4 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-cv4.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv4)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv5 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-cv5.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv5)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv6 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-cv6.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv6)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv7 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-cv7.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv7)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv8 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-cv8.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv8)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv9 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-cv9.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv9)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv10 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-cv10.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv10)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+join_data <- bind_rows(cv1, cv2, cv3, cv4, cv5, cv6, cv7, cv8, cv9, cv10) %>% 
+  distinct()
+
+join_val_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/39_OS/OS_v2/OS_time_1090-Test.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(join_val_data)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+join_all_data <- bind_rows(join_data, join_val_data)
+
+```
+
+
+# 3. training boxplot
+## 3.1 training data
+```{r}
+join_data2 <- join_data %>%
+  dplyr::mutate(Group_predicted = case_when(actual == 0 ~ "> 3 years",
+                                  actual == 1 ~ "< 3 years",
+                                  )) %>% 
+  distinct()
+
+```
+
+## 3.2 predicted_prob
+```{r}
+summary(join_data2[join_data2$Group_predicted=="> 3 years",]$predicted_prob)
+summary(join_data2[join_data2$Group_predicted=="< 3 years",]$predicted_prob)
+p <- wilcox.test(join_data2[join_data2$Group_predicted=="> 3 years",]$predicted_prob,join_data2[join_data2$Group_predicted=="< 3 years",]$predicted_prob)
+p$p.value
+
+boxplot_CancerScore <- data.frame(join_data2) %>%
+  select(Group_predicted, predicted_prob)
+
+boxplot_CancerScore$Group_predicted=factor(boxplot_CancerScore$Group_predicted, levels=c('> 3 years', '< 3 years'))
+
+pdf("20240927_03_training_predicted_prob_boxplot_v1.pdf", height=5.5, width=5.5)
+ggplot(boxplot_CancerScore,aes(x=Group_predicted,y=predicted_prob,fill=factor(Group_predicted),color=factor(Group_predicted)))+
+  # geom_violin(width=0.45, size = 1)+
+  geom_boxplot(width=0.3, size = 1)+
+  geom_quasirandom(width=0.1, varwidth = TRUE, cex=2, method = "quasirandom")+
+  scale_y_continuous(expand = ggplot2::expansion(mult = c(0.1, 0.1)))+
+  # geom_jitter(width=0.1)+
+  geom_signif(comparisons = list(c("> 3 years", "< 3 years")),
+              map_signif_level = T,
+              textsize = 8,
+              test = "wilcox.test",
+              step_increase = 0.1,
+              color = "#000000")+
+  annotate("text", x=1.32, y=median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="> 3 years",]$predicted_prob), label=sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="> 3 years",]$predicted_prob)), color = "#000000", size = 8)+
+  annotate("text", x=2.32, y=median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="< 3 years",]$predicted_prob), label=sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="< 3 years",]$predicted_prob)), color = "#000000", size = 8)+
+  #scale_y_log10()+
+  # ylim(0.5,1.05)+
+  theme_classic()+
+  theme(legend.position="NA")+
+  scale_fill_manual(values=c("#FFFFFF", "#FFFFFF"))+
+  scale_color_manual(values=c("#845EC2", "#008b8b"))+
+  labs(x="", y="Predicted Score", title="", fill = "") +
+  # theme(legend.text = element_text(size=15),
+  #       legend.title = element_text(face="bold", color="black", size=15))+
+  theme(panel.grid = element_blank(), axis.title = element_text(size = 15))+
+  theme(plot.title = element_text(face="bold", color="black", size=15, hjust = 0.5))+
+  theme(axis.line = element_line(linewidth=0.5, colour="black"))+
+  theme(axis.ticks = element_line(linewidth=0.5, colour="black"), axis.ticks.length=unit(0.5, "lines"))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold", color="black", size=15))
+dev.off()
+
+```
+
+
+# 4. validation boxplot
+## 4.1 validation data
+```{r}
+join_val_data2 <- join_val_data %>%
+  dplyr::mutate(Group_predicted = case_when(actual == 0 ~ "> 3 years",
+                                  actual == 1 ~ "< 3 years",
+                                  )) %>% 
+  distinct()
+
+```
+
+## 4.2 predicted_prob
+```{r}
+summary(join_val_data2[join_val_data2$Group_predicted=="> 3 years",]$predicted_prob)
+summary(join_val_data2[join_val_data2$Group_predicted=="< 3 years",]$predicted_prob)
+p <- wilcox.test(join_val_data2[join_val_data2$Group_predicted=="> 3 years",]$predicted_prob,join_val_data2[join_val_data2$Group_predicted=="< 3 years",]$predicted_prob)
+p$p.value
+
+boxplot_CancerScore <- data.frame(join_val_data2) %>%
+  select(Group_predicted, predicted_prob)
+
+boxplot_CancerScore$Group_predicted=factor(boxplot_CancerScore$Group_predicted, levels=c('> 3 years', '< 3 years'))
+
+pdf("20240927_03_validation_predicted_prob_boxplot_v2.pdf", height=5.5, width=5.5)
+ggplot(boxplot_CancerScore,aes(x=Group_predicted,y=predicted_prob,fill=factor(Group_predicted),color=factor(Group_predicted)))+
+  # geom_violin(width=0.45, size = 1)+
+  geom_boxplot(width=0.3, size = 1)+
+  geom_quasirandom(width=0.1, varwidth = TRUE, cex=2, method = "quasirandom")+
+  scale_y_continuous(expand = ggplot2::expansion(mult = c(0.1, 0.1)))+
+  # geom_jitter(width=0.1)+
+  geom_signif(comparisons = list(c("> 3 years", "< 3 years")),
+              map_signif_level = T,
+              textsize = 8,
+              test = "wilcox.test",
+              step_increase = 0.1,
+              color = "#000000")+
+  annotate("text", x=1.32, y=median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="> 3 years",]$predicted_prob), label=sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="> 3 years",]$predicted_prob)), color = "#000000", size = 8)+
+  annotate("text", x=2.32, y=median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="< 3 years",]$predicted_prob), label=sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="< 3 years",]$predicted_prob)), color = "#000000", size = 8)+
+  #scale_y_log10()+
+  # ylim(0.5,1.05)+
+  theme_classic()+
+  theme(legend.position="NA")+
+  scale_fill_manual(values=c("#FFFFFF", "#FFFFFF"))+
+  scale_color_manual(values=c("#845EC2", "#008b8b"))+
+  labs(x="", y="Predicted Score", title="", fill = "") +
+  # theme(legend.text = element_text(size=15),
+  #       legend.title = element_text(face="bold", color="black", size=15))+
+  theme(panel.grid = element_blank(), axis.title = element_text(size = 15))+
+  theme(plot.title = element_text(face="bold", color="black", size=15, hjust = 0.5))+
+  theme(axis.line = element_line(linewidth=0.5, colour="black"))+
+  theme(axis.ticks = element_line(linewidth=0.5, colour="black"), axis.ticks.length=unit(0.5, "lines"))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold", color="black", size=15))
+dev.off()
+
+```
+
+
+# 5. all data boxplot
+## 5.1 all data
+```{r}
+join_all_data2 <- join_all_data %>%
+  dplyr::mutate(Group_predicted = case_when(actual == 0 ~ "> 3 years",
+                                  actual == 1 ~ "< 3 years",
+                                  )) %>% 
+  distinct()
+
+```
+
+## 5.2 predicted_prob
+```{r}
+summary(join_all_data2[join_all_data2$Group_predicted=="> 3 years",]$predicted_prob)
+summary(join_all_data2[join_all_data2$Group_predicted=="< 3 years",]$predicted_prob)
+p <- wilcox.test(join_all_data2[join_all_data2$Group_predicted=="> 3 years",]$predicted_prob,join_all_data2[join_all_data2$Group_predicted=="< 3 years",]$predicted_prob)
+p$p.value
+
+boxplot_CancerScore <- data.frame(join_all_data2) %>%
+  select(Group_predicted, predicted_prob)
+
+boxplot_CancerScore$Group_predicted=factor(boxplot_CancerScore$Group_predicted, levels=c('> 3 years', '< 3 years'))
+
+pdf("20240927_03_all_data_boxplot_v2.pdf", height=5.5, width=5.5)
+ggplot(boxplot_CancerScore,aes(x=Group_predicted,y=predicted_prob,fill=factor(Group_predicted),color=factor(Group_predicted)))+
+  # geom_violin(width=0.45, size = 1)+
+  geom_boxplot(width=0.3, size = 1)+
+  geom_quasirandom(width=0.1, varwidth = TRUE, cex=2, method = "quasirandom")+
+  scale_y_continuous(expand = ggplot2::expansion(mult = c(0.1, 0.1)))+
+  # geom_jitter(width=0.1)+
+  geom_signif(comparisons = list(c("> 3 years", "< 3 years")),
+              map_signif_level = T,
+              textsize = 8,
+              test = "wilcox.test",
+              step_increase = 0.1,
+              color = "#000000")+
+  annotate("text", x=1.32, y=median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="> 3 years",]$predicted_prob), label=sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="> 3 years",]$predicted_prob)), color = "#000000", size = 8)+
+  annotate("text", x=2.32, y=median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="< 3 years",]$predicted_prob), label=sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Group_predicted=="< 3 years",]$predicted_prob)), color = "#000000", size = 8)+
+  #scale_y_log10()+
+  # ylim(0.5,1.05)+
+  theme_classic()+
+  theme(legend.position="NA")+
+  scale_fill_manual(values=c("#FFFFFF", "#FFFFFF"))+
+  scale_color_manual(values=c("#845EC2", "#008b8b"))+
+  labs(x="", y="Predicted Score", title="", fill = "") +
+  # theme(legend.text = element_text(size=15),
+  #       legend.title = element_text(face="bold", color="black", size=15))+
+  theme(panel.grid = element_blank(), axis.title = element_text(size = 15))+
+  theme(plot.title = element_text(face="bold", color="black", size=15, hjust = 0.5))+
+  theme(axis.line = element_line(linewidth=0.5, colour="black"))+
+  theme(axis.ticks = element_line(linewidth=0.5, colour="black"), axis.ticks.length=unit(0.5, "lines"))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold", color="black", size=15))
+dev.off()
+
+```
+

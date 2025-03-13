@@ -1,0 +1,1949 @@
+---
+html_document: default
+author: "Wei"
+date: '2024-09-25'
+output:
+  html_document:
+    df_print: paged
+title: "receiver operating characteristic curve (ROC curve)"
+---
+
+# 1. loading library and function
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ROCR))
+suppressPackageStartupMessages(library(pROC))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(ggbeeswarm))
+suppressPackageStartupMessages(library(pacman))
+pacman::p_load(tidyverse,ggpubr,rstatix,ggsci,ggsignif,reshape2)
+suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+# 2. loading data
+```{r}
+Clinical <- read_rds("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/31_Clinical_information/GC_Clinical_info_20240925.rds")
+
+# data_feature <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/00_backup/20240618-all-features.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(data_feature)[colnames(data_feature)=="GCID"] <- "Sample"
+
+cv1 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv1.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv1)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv2 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv2.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv2)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv3 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv3.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv3)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv4 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv4.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv4)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv5 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv5.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv5)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv6 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv6.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv6)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv7 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv7.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv7)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv8 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv8.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv8)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv9 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv9.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv9)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+cv10 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv10.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv10)<-c("predicted", "predicted_prob", "actual", "Sample")
+Training_dataset <- bind_rows(cv1, cv2, cv3, cv4, cv5, cv6, cv7, cv8, cv9, cv10)
+
+IVD_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/Internal_val.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(IVD_data)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+EVD_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/External_val.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(EVD_data) <- c("predicted", "predicted_prob", "actual", "Sample")
+
+join_data <- bind_rows(Training_dataset, IVD_data, EVD_data) %>% 
+  distinct()
+
+```
+
+# 3. data processed
+## 3.1 join
+```{r}
+join_data_Clinical <- join_data %>% 
+  left_join(Clinical, by = c("Sample" = "Sample")) %>% 
+  dplyr::mutate(Group_predicted = case_when(predicted == 0 ~ "Non-GC",
+                                            predicted == 1 ~ "GC",
+                                  )) %>% 
+  distinct()
+
+join_data_feature <- join_data_Clinical
+
+# join_data_feature <- join_data_Clinical %>% 
+#   left_join(data_feature, by = c("Sample" = "Sample")) %>% 
+#   distinct()
+
+```
+
+# 10. plot
+## 10.1 CEA, CA199, AFP（<=8.78ng/ml）, CA125(<=35.00U/ml), CA242(<=20.00U/ml), CA724(<=6.90U/ml) [CEA<=5.00ng/ml，CA199<=37.00U/ml，AFP<=8.78ng/ml, CA125<=35.00U/ml, CA242<=20.00U/ml, CA724<=6.90U/ml]
+```{r}
+data_CEA <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, CEA, Disease_Group, Group_predicted)
+data_CEA2 <- data_CEA %>%
+  filter(CEA != "/") %>%
+  mutate(CEA = str_replace_all(CEA, "<0.50", "0.499")) %>% 
+  mutate(CEA_Group = case_when(CEA > 5.00 ~ "High",
+                               CEA <= 5.00 ~ "Low",
+  ))
+
+data_CEA2 <- data_CEA2[complete.cases(data_CEA2$CEA), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+# calculate CEA prediction
+data_CEA2$CEA <- as.numeric(data_CEA2$CEA)
+data_CEA3 <- data_CEA2 %>% 
+  mutate(CEA_diagnose = case_when(CEA > 5.00 ~ "1",
+                                  CEA <= 5.00 ~ "0")) %>% 
+  mutate(CEA_ratio = CEA/sum(CEA))
+
+```
+
+## 10.2 select bengin and GC
+```{r}
+data_CEA_bengin <- data_CEA2 %>% 
+  filter(actual == 0)
+
+data_Low <- data_CEA2 %>% 
+  filter(actual == 1 & CEA_Group == "Low")
+data_High <- data_CEA2 %>% 
+  filter(actual == 1 & CEA_Group == "High")
+
+join_bengin_Low <- bind_rows(data_CEA_bengin, data_Low)
+join_bengin_High <- bind_rows(data_CEA_bengin, data_High)
+
+join_bengin_all <- bind_rows(data_CEA_bengin, data_Low, data_High)
+
+```
+
+
+# 11. CEA Low
+## 11.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Low$predicted <- factor(join_bengin_Low$predicted, levels = c(0, 1))
+join_bengin_Low$actual <- factor(join_bengin_Low$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Low$predicted, join_bengin_Low$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Low$actual, join_bengin_Low$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Low_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Low_Sensi) <- c("Sensitivity")
+Low_Sensi <- Low_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Low"))
+
+```
+
+## 11.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Low$predicted_prob, join_bengin_Low$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_Low$actual)
+
+pdf('20240925_01_CEA_Low_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+## 11.3 Confusion Matrix heatmap
+```{r}
+conf_matrix_df <- as.data.frame(conf_matrix$table)
+
+conf_matrix_df$Prediction <- factor(conf_matrix_df$Prediction, levels = c("0", "1"))
+
+pdf('20240925_01_CEA_Low_Heatmap_v1.pdf', width = 8, height = 6)
+ggplot(data = conf_matrix_df, aes(x = Prediction, y = Reference)) +
+  geom_tile(aes(fill = Freq), color = "#FFFFFF") +
+  geom_text(aes(label = Freq), vjust = 1, size = 10) + # 调整数字的大小为15
+  scale_fill_gradient(low = "#FFFFFF", high = "#9acd32") +
+  theme_minimal() +
+  labs(title = "CEA_Low", x = "Predicted", y = "Actual") +
+  scale_x_discrete(labels=c("0"="Non-GC", "1"="GC")) +
+  scale_y_discrete(labels=c("0"="Non-GC", "1"="GC")) +
+  theme(legend.position = "right",
+        legend.title = element_text(face = "bold", size = 15),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold", size = 20),  # 调整轴标题字号
+        axis.text.x = element_text(face = "bold", color = "black", size = 20),  # 调整x轴标签字号
+        axis.text.y = element_text(face = "bold", color = "black", size = 20),  # 调整y轴标签字号
+        plot.title = element_text(face = "bold", color = "black", size = 20))  # 调整图标题字号
+
+dev.off()
+
+```
+
+
+# 12. CEA High
+## 12.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_High$predicted <- factor(join_bengin_High$predicted, levels = c(0, 1))
+join_bengin_High$actual <- factor(join_bengin_High$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_High$predicted, join_bengin_High$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_High$actual, join_bengin_High$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+High_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(High_Sensi) <- c("Sensitivity")
+High_Sensi <- High_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "High"))
+
+```
+
+## 12.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_High$predicted_prob, join_bengin_High$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_High$actual)
+
+pdf('20240925_02_CEA_High_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+## 12.3 Confusion Matrix heatmap
+```{r}
+conf_matrix_df <- as.data.frame(conf_matrix$table)
+
+conf_matrix_df$Prediction <- factor(conf_matrix_df$Prediction, levels = c("0", "1"))
+
+pdf('20240925_01_CEA_High_Heatmap_v1.pdf', width = 8, height = 6)
+ggplot(data = conf_matrix_df, aes(x = Prediction, y = Reference)) +
+  geom_tile(aes(fill = Freq), color = "#FFFFFF") +
+  geom_text(aes(label = Freq), vjust = 1, size = 10) + # 调整数字的大小为15
+  scale_fill_gradient(low = "#FFFFFF", high = "#ed3c3c") +
+  theme_minimal() +
+  labs(title = "CEA_High", x = "Predicted", y = "Actual") +
+  scale_x_discrete(labels=c("0"="Non-GC", "1"="GC")) +
+  scale_y_discrete(labels=c("0"="Non-GC", "1"="GC")) +
+  theme(legend.position = "right",
+        legend.title = element_text(face = "bold", size = 15),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold", size = 20),  # 调整轴标题字号
+        axis.text.x = element_text(face = "bold", color = "black", size = 20),  # 调整x轴标签字号
+        axis.text.y = element_text(face = "bold", color = "black", size = 20),  # 调整y轴标签字号
+        plot.title = element_text(face = "bold", color = "black", size = 20))  # 调整图标题字号
+
+dev.off()
+
+```
+
+
+# 13. Sensitivity
+## 13.1 Percentage of Non-GC and GC
+```{r}
+join_sensitivity <- bind_rows(Low_Sensi, High_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("Low", "High"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_CEA_barplot_v1.png", plot_join_bengin_all, height=5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+# # 计算每个组的百分比
+# sample_group <- join_bengin_all %>%
+#   group_by(CEA_Group, Group_predicted) %>% 
+#   summarise(Count = n()) %>%
+#   mutate(Percentage = Count / sum(Count) * 100)
+# 
+# sample_group$Group_predicted=factor(sample_group$Group_predicted, levels=c("Non-GC", "GC"))
+# sample_group$CEA_Group=factor(sample_group$CEA_Group, levels=c("Low", "High"))
+# 
+# # 绘制barplot
+# plot_join_bengin_all <- ggplot(sample_group, aes(x = CEA_Group, y = Percentage, fill = Group_predicted)) +
+#   geom_bar(stat = "identity", width = 0.6, title= "") +
+#   labs(y = "Percentage (%)", x = NULL) +
+#   theme_classic() +
+#   # scale_y_continuous(expand = c(0.01,0)) +
+#   scale_fill_manual(values=c("#845EC2", "#FFC75F")) +
+#   theme(legend.position = "right", legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+#   theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+#   theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+#   theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=12),
+#         axis.text.y = element_text(face="bold", color="black", size=12),
+#         axis.title.x = element_text(face="bold", color="black", size=12),
+#         axis.title.y = element_text(face="bold",color="black", size=12))
+# ggsave("20240313_responder_barplot_v2.png", plot_TIDEscore_Responder, height=5, width=5, dpi = 300)
+# 
+# chisq.test(table(sample_group$CEA_Group, sample_group$Group_predicted))
+
+```
+
+
+## 13.2 Cancer score (predicted_prob)
+```{r}
+# # summary(join_bengin_all[join_bengin_all$CEA_Group=="Non-GC",]$predicted_prob)
+# summary(join_bengin_all[join_bengin_all$CEA_Group=="Low",]$predicted_prob)
+# summary(join_bengin_all[join_bengin_all$CEA_Group=="High",]$predicted_prob)
+# # p <- wilcox.test(join_bengin_all[join_bengin_all$CEA_Group=="Non-GC",]$predicted_prob,join_bengin_all[join_bengin_all$CEA_Group=="Low",]$predicted_prob)
+# # p$p.value
+# # p <- wilcox.test(join_bengin_all[join_bengin_all$CEA_Group=="Non-GC",]$predicted_prob,join_bengin_all[join_bengin_all$CEA_Group=="Mid",]$predicted_prob)
+# # p$p.value
+# p <- wilcox.test(join_bengin_all[join_bengin_all$CEA_Group=="Low",]$predicted_prob,join_bengin_all[join_bengin_all$CEA_Group=="High",]$predicted_prob)
+# p$p.value
+# 
+# boxplot_CancerScore <- data.frame(join_bengin_all) %>%
+#   select(CEA_Group, predicted_prob)
+# 
+# boxplot_CancerScore$CEA_Group=factor(boxplot_CancerScore$CEA_Group, levels=c('Non-GC', 'Low', 'Mid', 'High'))
+# 
+# pdf("20240410_cfDNA_06_CEA_Group_Cancer_score_boxplot_v1.pdf", height=5.5, width=6)
+# ggplot(boxplot_CancerScore, aes(x = CEA_Group, y = predicted_prob, fill = factor(CEA_Group), color = factor(CEA_Group))) +
+#   geom_boxplot(width = 0.3, size = 1) +
+#   geom_quasirandom(width = 0.1, varwidth = TRUE, cex = 2, method = "quasirandom") +
+#   scale_y_continuous(expand = ggplot2::expansion(mult = c(0.1, 0.1))) +
+#   stat_compare_means(comparisons = list(c("Non-GC", "Low"), c("Low", "Mid"), c("Mid", "High"), c("Non-GC", "Mid"), c("Low", "High"), c("Non-GC", "High")),
+#                      method = "wilcox.test",
+#                      label = "p.format", # p.signif
+#                      hide.ns = TRUE,
+#                      textsize = 5,
+#                      step.increase = 0.1,
+#                      label.x.npc = "right",
+#                      size = 4) +
+#   annotate("text", x = 1.32, y = median(boxplot_CancerScore[boxplot_CancerScore$CEA_Group == "Non-GC", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$CEA_Group == "Non-GC", ]$predicted_prob)), color = "#000000", size = 5) +
+#   annotate("text", x = 2.32, y = median(boxplot_CancerScore[boxplot_CancerScore$CEA_Group == "Low", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$CEA_Group == "Low", ]$predicted_prob)), color = "#000000", size = 5) +
+#   annotate("text", x = 3.32, y = median(boxplot_CancerScore[boxplot_CancerScore$CEA_Group == "Mid", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$CEA_Group == "Mid", ]$predicted_prob)), color = "#000000", size = 5) +
+#   annotate("text", x = 4.32, y = median(boxplot_CancerScore[boxplot_CancerScore$CEA_Group == "High", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$CEA_Group == "High", ]$predicted_prob)), color = "#000000", size = 5) +
+#   theme_classic() +
+#   theme(legend.position = "NA") +
+#   scale_fill_manual(values = c("#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF")) +
+#   scale_color_manual(values = c("#007fff", "#9acd32", "#12c3c3", "#ed3c3c")) +
+#   labs(x = "", y = "Cancer Score", title = "", fill = "") +
+#   theme(panel.grid = element_blank(), axis.title = element_text(size = 15)) +
+#   theme(plot.title = element_text(face = "bold", color = "black", size = 15, hjust = 0.5)) +
+#   theme(axis.line = element_line(linewidth = 0.5, colour = "black")) +
+#   theme(axis.ticks = element_line(linewidth = 0.5, colour = "black"), axis.ticks.length = unit(0.5, "lines")) +
+#   theme(axis.text.x = element_text(face = "bold", color = "black", size = 15),
+#         axis.text.y = element_text(face = "bold", color = "black", size = 15),
+#         axis.title.x = element_text(face = "bold", color = "black", size = 15),
+#         axis.title.y = element_text(face = "bold", color = "black", size = 15))
+# dev.off()
+
+```
+
+
+# 14. CEA Low
+## 14.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+data_CEA3$CEA_diagnose <- factor(data_CEA3$CEA_diagnose, levels = c(0, 1))
+data_CEA3$actual <- factor(data_CEA3$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(data_CEA3$CEA_diagnose, data_CEA3$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(data_CEA3$actual, data_CEA3$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Low_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Low_Sensi) <- c("Sensitivity")
+Low_Sensi <- Low_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Low"))
+
+```
+
+## 14.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(data_CEA3$predicted_prob, data_CEA3$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(data_CEA3$actual)
+
+pdf('20240925_01_CEA_diagnose_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+## 14.3 Confusion Matrix heatmap
+```{r}
+conf_matrix_df <- as.data.frame(conf_matrix$table)
+
+conf_matrix_df$Prediction <- factor(conf_matrix_df$Prediction, levels = c("0", "1"))
+
+pdf('20240925_01_CEA_diagnose_Heatmap_v1.pdf', width = 8, height = 6)
+ggplot(data = conf_matrix_df, aes(x = Prediction, y = Reference)) +
+  geom_tile(aes(fill = Freq), color = "#FFFFFF") +
+  geom_text(aes(label = Freq), vjust = 1, size = 10) + # 调整数字的大小为15
+  scale_fill_gradient(low = "#FFFFFF", high = "#9acd32") +
+  theme_minimal() +
+  labs(title = "CEA_Low", x = "Predicted", y = "Actual") +
+  scale_x_discrete(labels=c("0"="Non-GC", "1"="GC")) +
+  scale_y_discrete(labels=c("0"="Non-GC", "1"="GC")) +
+  theme(legend.position = "right",
+        legend.title = element_text(face = "bold", size = 15),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold", size = 20),  # 调整轴标题字号
+        axis.text.x = element_text(face = "bold", color = "black", size = 20),  # 调整x轴标签字号
+        axis.text.y = element_text(face = "bold", color = "black", size = 20),  # 调整y轴标签字号
+        plot.title = element_text(face = "bold", color = "black", size = 20))  # 调整图标题字号
+
+dev.off()
+
+```
+
+
+# 20. plot
+## 20.1 CA199 [CA199<=5.00ng/ml]
+```{r}
+data_CA199 <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, CA199, Disease_Group, Group_predicted)
+data_CA1992 <- data_CA199 %>%
+  filter(CA199 != "/") %>% 
+  mutate(CA199 = str_replace_all(CA199, "<1.20", "1.199")) %>% 
+  mutate(CA199_Group = case_when(CA199 > 37.00 ~ "High",
+                               CA199 <= 37.00 ~ "Low",
+  ))
+
+data_CA1992 <- data_CA1992[complete.cases(data_CA1992$CA199), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 20.2 select bengin and GC
+```{r}
+data_CA199_bengin <- data_CA1992 %>% 
+  filter(actual == 0)
+
+data_Low <- data_CA1992 %>% 
+  filter(actual == 1 & CA199_Group == "Low")
+data_High <- data_CA1992 %>% 
+  filter(actual == 1 & CA199_Group == "High")
+
+join_bengin_Low <- bind_rows(data_CA199_bengin, data_Low)
+join_bengin_High <- bind_rows(data_CA199_bengin, data_High)
+
+join_bengin_all <- bind_rows(data_CA199_bengin, data_Low, data_High)
+
+```
+
+
+# 21. CA199 Low
+## 21.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Low$predicted <- factor(join_bengin_Low$predicted, levels = c(0, 1))
+join_bengin_Low$actual <- factor(join_bengin_Low$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Low$predicted, join_bengin_Low$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Low$actual, join_bengin_Low$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Low_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Low_Sensi) <- c("Sensitivity")
+Low_Sensi <- Low_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Low"))
+
+```
+
+## 21.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Low$predicted_prob, join_bengin_Low$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_Low$actual)
+
+pdf('20240925_01_CA199_Low_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 22. CA199 High
+## 22.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_High$predicted <- factor(join_bengin_High$predicted, levels = c(0, 1))
+join_bengin_High$actual <- factor(join_bengin_High$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_High$predicted, join_bengin_High$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_High$actual, join_bengin_High$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+High_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(High_Sensi) <- c("Sensitivity")
+High_Sensi <- High_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "High"))
+
+```
+
+## 22.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_High$predicted_prob, join_bengin_High$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_High$actual)
+
+pdf('20240925_02_CA199_High_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 23. Sensitivity
+## 23.1 Percentage of Non-GC and GC
+```{r}
+join_sensitivity <- bind_rows(Low_Sensi, High_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("Low", "High"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_CA199_barplot_v1.png", plot_join_bengin_all, height=5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+
+# 30. plot
+## 30.1 AFP [AFP<=5.00ng/ml]
+```{r}
+data_AFP <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, AFP, Disease_Group, Group_predicted)
+data_AFP2 <- data_AFP %>%
+  filter(AFP != "/") %>% 
+  mutate(AFP = str_replace_all(AFP, "<0.5", "0.499")) %>% 
+  mutate(AFP_Group = case_when(AFP > 8.78 ~ "High",
+                               AFP <= 8.78 ~ "Low",
+  ))
+
+data_AFP2 <- data_AFP2[complete.cases(data_AFP2$AFP), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 30.2 select bengin and GC
+```{r}
+data_AFP_bengin <- data_AFP2 %>% 
+  filter(actual == 0)
+
+data_Low <- data_AFP2 %>% 
+  filter(actual == 1 & AFP_Group == "Low")
+data_High <- data_AFP2 %>% 
+  filter(actual == 1 & AFP_Group == "High")
+
+join_bengin_Low <- bind_rows(data_AFP_bengin, data_Low)
+join_bengin_High <- bind_rows(data_AFP_bengin, data_High)
+
+join_bengin_all <- bind_rows(data_AFP_bengin, data_Low, data_High)
+
+```
+
+
+# 31. AFP Low
+## 31.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Low$predicted <- factor(join_bengin_Low$predicted, levels = c(0, 1))
+join_bengin_Low$actual <- factor(join_bengin_Low$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Low$predicted, join_bengin_Low$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Low$actual, join_bengin_Low$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Low_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Low_Sensi) <- c("Sensitivity")
+Low_Sensi <- Low_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Low"))
+
+```
+
+## 31.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Low$predicted_prob, join_bengin_Low$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_Low$actual)
+
+pdf('20240925_01_AFP_Low_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 32. AFP High
+## 32.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_High$predicted <- factor(join_bengin_High$predicted, levels = c(0, 1))
+join_bengin_High$actual <- factor(join_bengin_High$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_High$predicted, join_bengin_High$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_High$actual, join_bengin_High$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+High_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(High_Sensi) <- c("Sensitivity")
+High_Sensi <- High_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "High"))
+
+```
+
+## 32.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_High$predicted_prob, join_bengin_High$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_High$actual)
+
+pdf('20240925_02_AFP_High_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 33. Sensitivity
+## 33.1 Percentage of Non-GC and GC
+```{r}
+join_sensitivity <- bind_rows(Low_Sensi, High_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("Low", "High"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_AFP_barplot_v1.png", plot_join_bengin_all, height=5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+
+
+# 40. plot
+## 40.1 CA125
+```{r}
+data_CA125 <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, CA125, Disease_Group, Group_predicted)
+data_CA1252 <- data_CA125 %>%
+  filter(CA125 != "/") %>% 
+  # mutate(CA125 = str_replace_all(CA125, "<0.50", "0.499")) %>% 
+  mutate(CA125_Group = case_when(CA125 > 35.00 ~ "High",
+                               CA125 <= 35.00 ~ "Low",
+  ))
+
+data_CA1252 <- data_CA1252[complete.cases(data_CA1252$CA125), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 40.2 select bengin and GC
+```{r}
+data_CA125_bengin <- data_CA1252 %>% 
+  filter(actual == 0)
+
+data_Low <- data_CA1252 %>% 
+  filter(actual == 1 & CA125_Group == "Low")
+data_High <- data_CA1252 %>% 
+  filter(actual == 1 & CA125_Group == "High")
+
+join_bengin_Low <- bind_rows(data_CA125_bengin, data_Low)
+join_bengin_High <- bind_rows(data_CA125_bengin, data_High)
+
+join_bengin_all <- bind_rows(data_CA125_bengin, data_Low, data_High)
+
+```
+
+
+# 41. CA125 Low
+## 41.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Low$predicted <- factor(join_bengin_Low$predicted, levels = c(0, 1))
+join_bengin_Low$actual <- factor(join_bengin_Low$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Low$predicted, join_bengin_Low$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Low$actual, join_bengin_Low$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Low_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Low_Sensi) <- c("Sensitivity")
+Low_Sensi <- Low_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Low"))
+
+```
+
+## 41.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Low$predicted_prob, join_bengin_Low$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_Low$actual)
+
+pdf('20240925_01_CA125_Low_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 42. CA125 High
+## 42.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_High$predicted <- factor(join_bengin_High$predicted, levels = c(0, 1))
+join_bengin_High$actual <- factor(join_bengin_High$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_High$predicted, join_bengin_High$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_High$actual, join_bengin_High$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+High_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(High_Sensi) <- c("Sensitivity")
+High_Sensi <- High_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "High"))
+
+```
+
+## 42.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_High$predicted_prob, join_bengin_High$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_High$actual)
+
+pdf('20240925_02_CA125_High_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 43. Sensitivity
+## 43.1 Percentage of Non-GC and GC
+```{r}
+join_sensitivity <- bind_rows(Low_Sensi, High_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("Low", "High"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_CA125_barplot_v1.png", plot_join_bengin_all, height=5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+
+
+# 50. plot
+## 50.1 CA242
+```{r}
+data_CA242 <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, CA242, Disease_Group, Group_predicted)
+data_CA2422 <- data_CA242 %>%
+  filter(CA242 != "/") %>% 
+  mutate(CA242 = str_replace_all(CA242, ">1000.00", "1000.001")) %>% 
+  mutate(CA242_Group = case_when(CA242 > 20.00 ~ "High",
+                               CA242 <= 20.00 ~ "Low",
+  ))
+
+data_CA2422 <- data_CA2422[complete.cases(data_CA2422$CA242), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 50.2 select bengin and GC
+```{r}
+data_CA242_bengin <- data_CA2422 %>% 
+  filter(actual == 0)
+
+data_Low <- data_CA2422 %>% 
+  filter(actual == 1 & CA242_Group == "Low")
+data_High <- data_CA2422 %>% 
+  filter(actual == 1 & CA242_Group == "High")
+
+join_bengin_Low <- bind_rows(data_CA242_bengin, data_Low)
+join_bengin_High <- bind_rows(data_CA242_bengin, data_High)
+
+join_bengin_all <- bind_rows(data_CA242_bengin, data_Low, data_High)
+
+```
+
+
+# 51. CA242 Low
+## 51.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Low$predicted <- factor(join_bengin_Low$predicted, levels = c(0, 1))
+join_bengin_Low$actual <- factor(join_bengin_Low$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Low$predicted, join_bengin_Low$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Low$actual, join_bengin_Low$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Low_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Low_Sensi) <- c("Sensitivity")
+Low_Sensi <- Low_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Low"))
+
+```
+
+## 51.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Low$predicted_prob, join_bengin_Low$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_Low$actual)
+
+pdf('20240925_01_CA242_Low_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 52. CA242 High
+## 52.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_High$predicted <- factor(join_bengin_High$predicted, levels = c(0, 1))
+join_bengin_High$actual <- factor(join_bengin_High$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_High$predicted, join_bengin_High$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_High$actual, join_bengin_High$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+High_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(High_Sensi) <- c("Sensitivity")
+High_Sensi <- High_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "High"))
+
+```
+
+## 52.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_High$predicted_prob, join_bengin_High$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_High$actual)
+
+pdf('20240925_02_CA242_High_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 53. Sensitivity
+## 53.1 Percentage of Non-GC and GC
+```{r}
+join_sensitivity <- bind_rows(Low_Sensi, High_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("Low", "High"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_CA242_barplot_v1.png", plot_join_bengin_all, height=5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+
+
+# 60. plot
+## 60.1 CA724
+```{r}
+data_CA724 <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, CA724, Disease_Group, Group_predicted)
+data_CA7242 <- data_CA724 %>%
+  filter(CA724 != "/") %>% 
+  mutate(CA724 = str_replace_all(CA724, "<1.50", "1.499")) %>% 
+  mutate(CA724_Group = case_when(CA724 > 6.9 ~ "High",
+                               CA724 <= 6.9 ~ "Low",
+  ))
+
+data_CA7242 <- data_CA7242[complete.cases(data_CA7242$CA724), ]
+# data_Diff2 <- data_Diff2 %>% 
+#   filter(str_detect(Differentiation, "Undetermined", negate = TRUE))
+#   filter(Differentiation != "Undetermined") %>% 
+
+```
+
+## 60.2 select bengin and GC
+```{r}
+data_CA724_bengin <- data_CA7242 %>% 
+  filter(actual == 0)
+
+data_Low <- data_CA7242 %>% 
+  filter(actual == 1 & CA724_Group == "Low")
+data_High <- data_CA7242 %>% 
+  filter(actual == 1 & CA724_Group == "High")
+
+join_bengin_Low <- bind_rows(data_CA724_bengin, data_Low)
+join_bengin_High <- bind_rows(data_CA724_bengin, data_High)
+
+join_bengin_all <- bind_rows(data_CA724_bengin, data_Low, data_High)
+
+```
+
+
+# 61. CA724 Low
+## 61.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_Low$predicted <- factor(join_bengin_Low$predicted, levels = c(0, 1))
+join_bengin_Low$actual <- factor(join_bengin_Low$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_Low$predicted, join_bengin_Low$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_Low$actual, join_bengin_Low$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+Low_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(Low_Sensi) <- c("Sensitivity")
+Low_Sensi <- Low_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "Low"))
+
+```
+
+## 61.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_Low$predicted_prob, join_bengin_Low$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_Low$actual)
+
+pdf('20240925_01_CA724_Low_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#9acd32", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Low") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 62. CA724 High
+## 62.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_High$predicted <- factor(join_bengin_High$predicted, levels = c(0, 1))
+join_bengin_High$actual <- factor(join_bengin_High$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_High$predicted, join_bengin_High$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_High$actual, join_bengin_High$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+High_Sensi <- sensitivity %>% 
+  as.data.frame()
+colnames(High_Sensi) <- c("Sensitivity")
+High_Sensi <- High_Sensi %>% 
+  rownames_to_column(var = "Group") %>% 
+  mutate(Group = str_replace_all(Group, "Sensitivity", "High"))
+
+```
+
+## 62.2 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_High$predicted_prob, join_bengin_High$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_High$actual)
+
+pdf('20240925_02_CA724_High_ROC_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#ed3c3c", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "High") +
+  # scale_color_brewer(palette = "#73e68c") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3))), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[2])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[1])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 63. Sensitivity
+## 63.1 Percentage of Non-GC and GC
+```{r}
+join_sensitivity <- bind_rows(Low_Sensi, High_Sensi) %>% 
+  mutate(Sensitivity = Sensitivity * 100)
+
+join_sensitivity$Group = factor(join_sensitivity$Group, levels=c("Low", "High"))
+
+plot_join_bengin_all <- ggplot(join_sensitivity, aes(x = Group, y = Sensitivity, fill = "")) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = paste(round(Sensitivity, 2), "%")), position = position_stack(vjust = 1.05), size = 6, color = "#000000") +
+  labs(y = "Sensitivity (100%)", x = NULL) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  # scale_y_continuous(expand = c(0.01,0)) +
+  scale_fill_manual(values=c("#845EC2")) + # "#845EC2"
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="black", size=10)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))+
+  theme(axis.text.x = element_text(angle=0, vjust = 0, hjust = 0.5, face="bold", color="black", size=15),
+        axis.text.y = element_text(face="bold", color="black", size=15),
+        axis.title.x = element_text(face="bold", color="black", size=15),
+        axis.title.y = element_text(face="bold",color="black", size=15))
+ggsave("20240925_CA724_barplot_v1.png", plot_join_bengin_all, height=5, width=4, dpi = 300)
+
+chisq.test(table(join_sensitivity$Group, join_sensitivity$Sensitivity))
+
+```
+

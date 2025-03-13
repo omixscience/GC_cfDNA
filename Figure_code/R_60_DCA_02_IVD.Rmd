@@ -1,0 +1,57 @@
+---
+html_document: default
+author: "Wei"
+date: '2024-09-19'
+output:
+  html_document:
+    df_print: paged
+title: "receiver operating characteristic curve (ROC curve)"
+---
+
+# 1. loading library and function
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(ggbeeswarm))
+suppressPackageStartupMessages(library(pacman))
+pacman::p_load(tidyverse,ggpubr,rstatix,ggsci,ggsignif,reshape2)
+suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(rmda))
+suppressPackageStartupMessages(library(stringr))
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+# 2. loading data
+```{r}
+Clinical <- read_rds("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/31_Clinical_information/GC_Clinical_info_20240925.rds")
+
+IVD_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/Internal_val.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(IVD_data)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+```
+
+# 3. data processed
+## 3.1 创建模型
+```{r}
+dca_model <- decision_curve(actual ~ predicted_prob, 
+                            data = IVD_data, 
+                            family = binomial(link = 'logit'), 
+                            thresholds = seq(0, 1, by = 0.01), 
+                            confidence.intervals = 0.95)
+
+```
+
+## 3.2 绘制DCA曲线
+```{r}
+pdf("20240926_02_IVD_DCA_v1.pdf", height=6, width=8)
+plot_decision_curve(dca_model, 
+                    curve.names = "DCA for Model", 
+                    col = c("#1a7fe6"),
+                    legend.position = "bottomleft")
+dev.off()
+
+```
+

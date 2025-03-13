@@ -1,0 +1,669 @@
+---
+html_document: default
+author: "Wei"
+date: '2024-09-25'
+output:
+  html_document:
+    df_print: paged
+title: "receiver operating characteristic curve (ROC curve)"
+---
+
+# 1. loading library and function
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ROCR))
+suppressPackageStartupMessages(library(pROC))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(ggbeeswarm))
+suppressPackageStartupMessages(library(pacman))
+pacman::p_load(tidyverse,ggpubr,rstatix,ggsci,ggsignif,reshape2)
+suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+# 2. loading data
+```{r}
+Clinical <- read_rds("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/31_Clinical_information/GC_Clinical_info_20240925.rds")
+
+# data_feature <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/00_backup/20240618-all-features.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(data_feature)[colnames(data_feature)=="GCID"] <- "Sample"
+
+# cv1 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/cv1.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(cv1)<-c("predicted", "predicted_prob", "actual", "Sample")
+# cv2 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/cv2.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(cv2)<-c("predicted", "predicted_prob", "actual", "Sample")
+# cv3 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/cv3.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(cv3)<-c("predicted", "predicted_prob", "actual", "Sample")
+# cv4 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/cv4.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(cv4)<-c("predicted", "predicted_prob", "actual", "Sample")
+# cv5 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/cv5.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(cv5)<-c("predicted", "predicted_prob", "actual", "Sample")
+# cv6 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/cv6.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(cv6)<-c("predicted", "predicted_prob", "actual", "Sample")
+# cv7 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/cv7.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(cv7)<-c("predicted", "predicted_prob", "actual", "Sample")
+# cv8 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/cv8.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(cv8)<-c("predicted", "predicted_prob", "actual", "Sample")
+# cv9 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/cv9.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(cv9)<-c("predicted", "predicted_prob", "actual", "Sample")
+# cv10 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/cv10.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(cv10)<-c("predicted", "predicted_prob", "actual", "Sample")
+# Training_dataset <- bind_rows(cv1, cv2, cv3, cv4, cv5, cv6, cv7, cv8, cv9, cv10)
+
+IVD_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/Internal_val.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(IVD_data) <- c("predicted", "predicted_prob", "actual", "Sample")
+# EVD_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/22_AUC/Top100_features/External_val.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+# colnames(EVD_data) <- c("predicted", "predicted_prob", "actual", "Sample")
+join_data <- IVD_data %>% 
+  distinct()
+
+```
+
+# 3. data processed
+## 3.1 join
+```{r}
+join_data_Clinical <- join_data %>% 
+  left_join(Clinical, by = c("Sample" = "Sample")) %>% 
+  dplyr::mutate(Group_predicted = case_when(predicted == 0 ~ "Non-GC",
+                                            predicted == 1 ~ "GC",
+                                  )) %>% 
+  distinct()
+
+join_data_feature <- join_data_Clinical
+
+# join_data_feature <- join_data_Clinical %>% 
+#   left_join(data_feature, by = c("Sample" = "Sample")) %>% 
+#   distinct()
+
+```
+
+# 4. plot
+## 4.1 Stage
+```{r}
+data_stage <- join_data_feature %>% 
+  select(predicted, predicted_prob, actual, Sample, Stage, Disease_Group, Group_predicted) %>% 
+  mutate(Stage = replace_na(Stage, "Undetermined")) %>% 
+  distinct()
+data_stage2 <- data_stage[complete.cases(data_stage$Stage), ]
+data_stage2 <- data_stage2 %>% 
+  distinct()
+  
+# data_stage3 <- data_stage2 %>% 
+#   filter(Stage != "Undetermined") %>% 
+#   distinct()
+
+```
+
+## 4.2 select bengin and GC
+```{r}
+data_bengin <- data_stage2 %>% 
+  filter(actual == 0)
+
+data_GC_S1 <- data_stage2 %>% 
+  filter(actual == 1 & Stage == "I")
+data_GC_S2 <- data_stage2 %>% 
+  filter(actual == 1 & Stage == "II")
+data_GC_S3 <- data_stage2 %>% 
+  filter(actual == 1 & Stage == "III")
+data_GC_S4 <- data_stage2 %>% 
+  filter(actual == 1 & Stage == "IV")
+
+join_bengin_S1 <- bind_rows(data_bengin, data_GC_S1)
+join_bengin_S2 <- bind_rows(data_bengin, data_GC_S2)
+join_bengin_S3 <- bind_rows(data_bengin, data_GC_S3)
+join_bengin_S4 <- bind_rows(data_bengin, data_GC_S4)
+
+```
+
+
+# 5. Stage I
+## 5.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_S1$predicted <- factor(join_bengin_S1$predicted, levels = c(0, 1))
+join_bengin_S1$actual <- factor(join_bengin_S1$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_S1$predicted, join_bengin_S1$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_S1$actual, join_bengin_S1$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+```
+
+## 5.2 AUC 95% CI
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_S1$predicted <- factor(join_bengin_S1$predicted, levels = c(0, 1))
+join_bengin_S1$actual <- factor(join_bengin_S1$actual, levels = c(1, 0))
+
+# 计算AUC和95%置信区间
+roc_obj <- roc(join_bengin_S1$actual, join_bengin_S1$predicted_prob)
+auc_value <- auc(roc_obj)
+ci_value <- ci.auc(roc_obj)
+
+# 打印结果
+print(paste("AUC:", round(auc_value, 3)))
+print(paste("95% CI:", round(ci_value[1], 3), "-", round(ci_value[3], 3)))
+
+```
+
+
+## 5.3 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_S1$predicted_prob, join_bengin_S1$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_S1$actual)
+
+pdf('20240925_01_Stage_I_ROC_IVD_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#FBB4AE", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Stage I") + #  (x: 1-Specificity, y: Sensitivity)
+  # scale_color_brewer(palette = "#FBB4AE") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3),
+                             " (",
+                             round(ci_value[1], 3),
+                             "-",
+                             round(ci_value[3], 3),
+                             ")"
+                             )), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 6. Stage II
+## 6.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_S2$predicted <- factor(join_bengin_S2$predicted, levels = c(0, 1))
+join_bengin_S2$actual <- factor(join_bengin_S2$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_S2$predicted, join_bengin_S2$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_S2$actual, join_bengin_S2$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+```
+
+## 6.2 AUC 95% CI
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_S2$predicted <- factor(join_bengin_S2$predicted, levels = c(0, 1))
+join_bengin_S2$actual <- factor(join_bengin_S2$actual, levels = c(1, 0))
+
+# 计算AUC和95%置信区间
+roc_obj <- roc(join_bengin_S2$actual, join_bengin_S2$predicted_prob)
+auc_value <- auc(roc_obj)
+ci_value <- ci.auc(roc_obj)
+
+# 打印结果
+print(paste("AUC:", round(auc_value, 3)))
+print(paste("95% CI:", round(ci_value[1], 3), "-", round(ci_value[3], 3)))
+
+```
+
+## 6.3 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_S2$predicted_prob, join_bengin_S2$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_S2$actual)
+
+pdf('20240925_02_Stage_II_ROC_IVD_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#B3CDE3", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Stage II") + #  (x: 1-Specificity, y: Sensitivity)
+  # scale_color_brewer(palette = "#FBB4AE") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3),
+                             " (",
+                             round(ci_value[1], 3),
+                             "-",
+                             round(ci_value[3], 3),
+                             ")"
+                             )), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 7. Stage III
+## 7.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_S3$predicted <- factor(join_bengin_S3$predicted, levels = c(0, 1))
+join_bengin_S3$actual <- factor(join_bengin_S3$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_S3$predicted, join_bengin_S3$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_S3$actual, join_bengin_S3$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+```
+
+## 7.2 AUC 95% CI
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_S3$predicted <- factor(join_bengin_S3$predicted, levels = c(0, 1))
+join_bengin_S3$actual <- factor(join_bengin_S3$actual, levels = c(1, 0))
+
+# 计算AUC和95%置信区间
+roc_obj <- roc(join_bengin_S3$actual, join_bengin_S3$predicted_prob)
+auc_value <- auc(roc_obj)
+ci_value <- ci.auc(roc_obj)
+
+# 打印结果
+print(paste("AUC:", round(auc_value, 3)))
+print(paste("95% CI:", round(ci_value[1], 3), "-", round(ci_value[3], 3)))
+
+```
+
+## 7.3 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_S3$predicted_prob, join_bengin_S3$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_S3$actual)
+
+pdf('20240925_03_Stage_III_ROC_IVD_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#CCEBC5", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Stage III") + #  (x: 1-Specificity, y: Sensitivity)
+  # scale_color_brewer(palette = "#FBB4AE") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3),
+                             " (",
+                             round(ci_value[1], 3),
+                             "-",
+                             round(ci_value[3], 3),
+                             ")"
+                             )), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 8. Stage IV
+## 8.1 Calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_S4$predicted <- factor(join_bengin_S4$predicted, levels = c(0, 1))
+join_bengin_S4$actual <- factor(join_bengin_S4$actual, levels = c(1, 0))
+
+# 计算混淆矩阵
+conf_matrix <- confusionMatrix(join_bengin_S4$predicted, join_bengin_S4$actual)
+
+# 计算准确率
+accuracy <- conf_matrix$overall['Accuracy']
+
+# 计算AUC
+auc <- roc(join_bengin_S4$actual, join_bengin_S4$predicted_prob)$auc
+
+# 计算阳性预测值（PPV）
+ppv <- conf_matrix$byClass['Pos Pred Value']
+
+# 计算阴性预测值（NPV）
+npv <- conf_matrix$byClass['Neg Pred Value']
+
+# 计算敏感性（Sensitivity）
+sensitivity <- conf_matrix$byClass['Sensitivity']
+
+# 计算特异性（Specificity）
+specificity <- conf_matrix$byClass['Specificity']
+
+# 打印结果
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("AUC:", round(auc, 3)))
+print(paste("PPV:", round(ppv, 3)))
+print(paste("NPV:", round(npv, 3)))
+print(paste("Sensitivity:", round(sensitivity, 3)))
+print(paste("Specificity:", round(specificity, 3)))
+
+```
+
+## 8.2 AUC 95% CI
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+join_bengin_S4$predicted <- factor(join_bengin_S4$predicted, levels = c(0, 1))
+join_bengin_S4$actual <- factor(join_bengin_S4$actual, levels = c(1, 0))
+
+# 计算AUC和95%置信区间
+roc_obj <- roc(join_bengin_S4$actual, join_bengin_S4$predicted_prob)
+auc_value <- auc(roc_obj)
+ci_value <- ci.auc(roc_obj)
+
+# 打印结果
+print(paste("AUC:", round(auc_value, 3)))
+print(paste("95% CI:", round(ci_value[1], 3), "-", round(ci_value[3], 3)))
+
+```
+
+## 8.3 AUC plot
+```{r}
+# 创建ROCR预测对象
+pred <- prediction(join_bengin_S4$predicted_prob, join_bengin_S4$actual)
+
+# 计算AUC
+perf_auc <- performance(pred, "auc")
+auc <- as.numeric(performance(pred, "auc")@y.values)
+# slotNames(perf_auc)
+
+# 创建ROC曲线
+perf_roc <- performance(pred, measure = "tpr", x.measure = "fpr")
+
+# tibble(x = perf_roc@x.values[[1]], y = perf_roc@y.values[[1]]) %>%
+#   ggplot(aes(x = x, y = y)) + geom_line()
+
+# Non-GC and GC count
+count <- table(join_bengin_S4$actual)
+
+pdf('20240925_04_Stage_IV_ROC_IVD_v1.pdf', width = 8, height = 6)
+tibble(x=perf_roc@x.values[[1]], y=perf_roc@y.values[[1]]) %>%
+ggplot(aes(x=x, y=y)) + 
+  # geom_line(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), linewidth=2) +
+  # geom_point(aes(color=cut(y, c(-1,0.5,0.7,0.9,1))), size = 3) +
+  geom_line(color = "#DECBE4", linewidth=2) +
+  # geom_point(color = "#ccccff", size = 3) +
+  theme_bw()+
+  labs(color="TPR", x="False Positive Rate", y="True Positive Rate", title = "Stage IV") + #  (x: 1-Specificity, y: Sensitivity)
+  # scale_color_brewer(palette = "#FBB4AE") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  geom_text(aes(x=1, y=0, 
+                label=paste0("AUC: ", 
+                             perf_auc@y.values[[1]] %>% 
+                               round(3),
+                             " (",
+                             round(ci_value[1], 3),
+                             "-",
+                             round(ci_value[3], 3),
+                             ")"
+                             )), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.08, 
+                label=paste0("GC: ", count[1])), 
+            hjust="right", vjust="bottom", size=6)+
+  geom_text(aes(x=1, y=0.16, 
+                label=paste0("Non-GC: ", count[2])),
+            hjust="right", vjust="bottom", size=6)+
+  theme(plot.title = element_text(face="bold", color="black", size=20, hjust = 0.5))+
+  theme(axis.text.x = element_text(face="bold", color="black", size=20),
+        axis.text.y = element_text(face="bold", color="black", size=20),
+        axis.title.x = element_text(face="bold", color="black", size=20),
+        axis.title.y = element_text(face="bold",color="black", size=20))
+dev.off()
+
+```
+
+
+# 9. Cancer score in all Stage
+## 9.1 barplot
+```{r}
+join_join_bengin_all <- bind_rows(data_GC_S1, data_GC_S2, data_GC_S3, data_GC_S4)
+
+summary(join_join_bengin_all[join_join_bengin_all$Stage=="I",]$predicted_prob)
+summary(join_join_bengin_all[join_join_bengin_all$Stage=="II",]$predicted_prob)
+summary(join_join_bengin_all[join_join_bengin_all$Stage=="III",]$predicted_prob)
+summary(join_join_bengin_all[join_join_bengin_all$Stage=="IV",]$predicted_prob)
+# p <- wilcox.test(join_join_bengin_all[join_join_bengin_all$Stage=="I",]$predicted_prob,join_join_bengin_all[join_join_bengin_all$Stage=="II",]$predicted_prob)
+# p$p.value
+# p <- wilcox.test(join_join_bengin_all[join_join_bengin_all$Stage=="I",]$predicted_prob,join_join_bengin_all[join_join_bengin_all$Stage=="III",]$predicted_prob)
+# p$p.value
+# p <- wilcox.test(join_join_bengin_all[join_join_bengin_all$Stage=="I",]$predicted_prob,join_join_bengin_all[join_join_bengin_all$Stage=="IV",]$predicted_prob)
+# p$p.value
+
+boxplot_CancerScore <- data.frame(join_join_bengin_all) %>%
+  select(Stage, predicted_prob)
+
+boxplot_CancerScore$Stage=factor(boxplot_CancerScore$Stage, levels=c('I', 'II', 'III', 'IV'))
+
+summary_stats <- boxplot_CancerScore %>%
+  group_by(Stage) %>%
+  summarise(Median = median(predicted_prob),
+            Mean = mean(predicted_prob),
+            SD = sd(predicted_prob),
+            .groups = 'drop')
+
+plot_summary_stats <- ggplot(summary_stats, aes(x = Stage, y = Mean, fill = Stage)) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD), width = 0.2) +
+  geom_text(aes(label = paste(round(Median, 3), "")), position = position_stack(vjust = 0.1), size = 5, color = "#000000") +
+  labs(y = "Cancer Score", x = "Stage") +
+  ylim(0, 1.16) +
+  theme_classic() +
+  # scale_fill_brewer(palette = "Pastel1")
+  scale_fill_manual(values = c("#FBB4AE", "#B3CDE3", "#CCEBC5", "#DECBE4")) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 0, vjust = 0.5, hjust = 0.5, face = "bold", size = 15),
+        axis.text.y = element_text(face = "bold", color="#000000", size = 15),
+        axis.title.x = element_text(face = "bold", color="#000000", size = 15),
+        axis.title.y = element_text(face = "bold", color="#000000", size = 15)) +
+  theme(legend.title = element_blank(), legend.text = element_text(face="bold", color="#000000", size=15)) + 
+  theme(axis.line=element_line(linewidth=0.5,colour="black"))+
+  theme(axis.ticks=element_line(linewidth=0.5,colour="black"),axis.ticks.length=unit(0.5,"lines"))
+ggsave("20240925_05_Stage_CancerScore_barplot_IVD_v1.png", plot_summary_stats, height=4.5, width=6, dpi = 300)
+
+```
+
+## 9.2 boxplot
+```{r}
+pdf("20240925_06_Stage_Cancer_score_barplot_IVD_v1.pdf", height=6, width=8)
+ggplot(boxplot_CancerScore, aes(x = Stage, y = predicted_prob, fill = factor(Stage), color = factor(Stage))) +
+  geom_boxplot(width = 0.3, size = 1) +
+  geom_quasirandom(width = 0.1, varwidth = TRUE, cex = 2, method = "quasirandom") +
+  scale_y_continuous(expand = ggplot2::expansion(mult = c(0.1, 0.1))) +
+  stat_compare_means(comparisons = list(c("Non-GC", "Low"), c("Low", "Mid"), c("Mid", "High"), c("Non-GC", "Mid"), c("Low", "High"), c("Non-GC", "High")),
+                     method = "wilcox.test",
+                     label = "p.format", # p.signif
+                     hide.ns = TRUE,
+                     textsize = 5,
+                     step.increase = 0.1,
+                     label.x.npc = "right",
+                     size = 4) +
+  annotate("text", x = 1.32, y = median(boxplot_CancerScore[boxplot_CancerScore$Stage == "Non-GC", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Stage == "Non-GC", ]$predicted_prob)), color = "#000000", size = 5) +
+  annotate("text", x = 2.32, y = median(boxplot_CancerScore[boxplot_CancerScore$Stage == "Low", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Stage == "Low", ]$predicted_prob)), color = "#000000", size = 5) +
+  annotate("text", x = 3.32, y = median(boxplot_CancerScore[boxplot_CancerScore$Stage == "Mid", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Stage == "Mid", ]$predicted_prob)), color = "#000000", size = 5) +
+  annotate("text", x = 4.32, y = median(boxplot_CancerScore[boxplot_CancerScore$Stage == "High", ]$predicted_prob), label = sprintf("%0.2f", median(boxplot_CancerScore[boxplot_CancerScore$Stage == "High", ]$predicted_prob)), color = "#000000", size = 5) +
+  theme_classic() +
+  theme(legend.position = "NA") +
+  scale_fill_manual(values = c("#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF")) +
+  scale_color_manual(values = c("#FBB4AE", "#B3CDE3", "#CCEBC5", "#DECBE4")) +
+  labs(x = "", y = "Cancer Score", title = "", fill = "") +
+  theme(panel.grid = element_blank(), axis.title = element_text(size = 15)) +
+  theme(plot.title = element_text(face = "bold", color = "black", size = 15, hjust = 0.5)) +
+  theme(axis.line = element_line(linewidth = 0.5, colour = "black")) +
+  theme(axis.ticks = element_line(linewidth = 0.5, colour = "black"), axis.ticks.length = unit(0.5, "lines")) +
+  theme(axis.text.x = element_text(face = "bold", color = "black", size = 15),
+        axis.text.y = element_text(face = "bold", color = "black", size = 15),
+        axis.title.x = element_text(face = "bold", color = "black", size = 15),
+        axis.title.y = element_text(face = "bold", color = "black", size = 15))
+dev.off()
+
+```
+

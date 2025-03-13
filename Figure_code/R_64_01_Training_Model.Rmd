@@ -1,0 +1,662 @@
+---
+html_document: default
+author: "Jia"
+date: '2024-09-26'
+output:
+pdf_document: default
+title: "receiver operating characteristic curve (ROC curve)"
+---
+
+```{r}
+rm(list=ls())
+```
+
+# 1. loading library and function
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ROCR))
+suppressPackageStartupMessages(library(pROC))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(tibble))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+
+# 2. loading data
+```{r}
+Clinical <- read_rds("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/31_Clinical_information/GC_Clinical_info_20240925.rds")
+
+cv1 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv1.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv1)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv2 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv2.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv2)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv3 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv3.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv3)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv4 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv4.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv4)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv5 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv5.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv5)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv6 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv6.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv6)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv7 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv7.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv7)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv8 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv8.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv8)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv9 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv9.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv9)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv10 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv10.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv10)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+Model_20_DLA <- bind_rows(cv1, cv2, cv3, cv4, cv5, cv6, cv7, cv8, cv9, cv10)
+
+Model_02_GLM <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/64_Model/GC_20240926_model/02_GLM/01_prediction_results.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(Model_02_GLM)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+Model_03_SVM <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/64_Model/GC_20240926_model/03_SVM/01_prediction_results.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(Model_03_SVM)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+Model_04_RFC <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/64_Model/GC_20240926_model/04_RFC/01_prediction_results.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(Model_04_RFC)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+Model_07_XGBoost <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/64_Model/GC_20240926_model/07_XGBoost/01_prediction_results.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(Model_07_XGBoost)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+Model_08_LightGBM <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/64_Model/GC_20240926_model/08_LightGBM/01_prediction_results.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(Model_08_LightGBM)<-c("predicted", "predicted_prob", "actual", "Sample")
+
+```
+
+# 3. data processed
+## 3.1 Model_20_DLA calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+Model_20_DLA$predicted <- factor(Model_20_DLA$predicted, levels = c(0, 1))
+Model_20_DLA$actual <- factor(Model_20_DLA$actual, levels = c(1, 0))
+
+# # 计算混淆矩阵
+# Model_20_DLA_conf_matrix <- confusionMatrix(Model_20_DLA$predicted, Model_20_DLA$actual)
+# 
+# # 计算准确率
+# Model_20_DLA_accuracy <- Model_20_DLA_conf_matrix$overall['Accuracy']
+# 
+# # 计算AUC
+# Model_20_DLA_auc <- roc(Model_20_DLA$actual, Model_20_DLA$predicted_prob)$auc
+# 
+# # 计算阳性预测值（PPV）
+# Model_20_DLA_ppv <- Model_20_DLA_conf_matrix$byClass['Pos Pred Value']
+# 
+# # 计算阴性预测值（NPV）
+# Model_20_DLA_npv <- Model_20_DLA_conf_matrix$byClass['Neg Pred Value']
+# 
+# # 计算敏感性（Sensitivity）
+# Model_20_DLA_sensitivity <- Model_20_DLA_conf_matrix$byClass['Sensitivity']
+# 
+# # 计算特异性（Specificity）
+# Model_20_DLA_specificity <- Model_20_DLA_conf_matrix$byClass['Specificity']
+# 
+# # Benign and Malignant count
+# Model_20_DLA_count <- table(Model_20_DLA$actual)
+# 
+# # 打印结果
+# print(paste("Accuracy:", round(Model_20_DLA_accuracy, 3)))
+# print(paste("AUC:", round(Model_20_DLA_auc, 3)))
+# print(paste("PPV:", round(Model_20_DLA_ppv, 3)))
+# print(paste("NPV:", round(Model_20_DLA_npv, 3)))
+# print(paste("Sensitivity:", round(Model_20_DLA_sensitivity, 3)))
+# print(paste("Specificity:", round(Model_20_DLA_specificity, 3)))
+# print(paste("Benign:", Model_20_DLA_count[1]))
+# print(paste("Malignant:", Model_20_DLA_count[2]))
+# 
+
+Model_20_DLA_roc <- roc(Model_20_DLA$actual, Model_20_DLA$predicted_prob)
+Model_20_DLA_auc <- auc(Model_20_DLA_roc)
+Model_20_DLA_ci_value <- ci.auc(Model_20_DLA_roc)
+
+# 打印结果
+print(paste("AUC:", round(Model_20_DLA_auc, 3)))
+print(paste("95% CI:", round(Model_20_DLA_ci_value[1], 3), "-", round(Model_20_DLA_ci_value[3], 3)))
+
+```
+
+
+## 3.2 Model_02_GLM calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+Model_02_GLM$predicted <- factor(Model_02_GLM$predicted, levels = c(0, 1))
+Model_02_GLM$actual <- factor(Model_02_GLM$actual, levels = c(1, 0))
+
+# # 计算混淆矩阵
+# Model_02_GLM_conf_matrix <- confusionMatrix(Model_02_GLM$predicted, Model_02_GLM$actual)
+# 
+# # 计算准确率
+# Model_02_GLM_accuracy <- Model_02_GLM_conf_matrix$overall['Accuracy']
+# 
+# # 计算AUC
+# Model_02_GLM_auc <- roc(Model_02_GLM$actual, Model_02_GLM$predicted_prob)$auc
+# 
+# # 计算阳性预测值（PPV）
+# Model_02_GLM_ppv <- Model_02_GLM_conf_matrix$byClass['Pos Pred Value']
+# 
+# # 计算阴性预测值（NPV）
+# Model_02_GLM_npv <- Model_02_GLM_conf_matrix$byClass['Neg Pred Value']
+# 
+# # 计算敏感性（Sensitivity）
+# Model_02_GLM_sensitivity <- Model_02_GLM_conf_matrix$byClass['Sensitivity']
+# 
+# # 计算特异性（Specificity）
+# Model_02_GLM_specificity <- Model_02_GLM_conf_matrix$byClass['Specificity']
+# 
+# # Benign and Malignant count
+# Model_02_GLM_count <- table(Model_02_GLM$actual)
+# 
+# # 打印结果
+# print(paste("Accuracy:", round(Model_02_GLM_accuracy, 3)))
+# print(paste("AUC:", round(Model_02_GLM_auc, 3)))
+# print(paste("PPV:", round(Model_02_GLM_ppv, 3)))
+# print(paste("NPV:", round(Model_02_GLM_npv, 3)))
+# print(paste("Sensitivity:", round(Model_02_GLM_sensitivity, 3)))
+# print(paste("Specificity:", round(Model_02_GLM_specificity, 3)))
+# print(paste("Benign:", Model_02_GLM_count[1]))
+# print(paste("Malignant:", Model_02_GLM_count[2]))
+
+Model_02_GLM_roc <- roc(Model_02_GLM$actual, Model_02_GLM$predicted_prob)
+Model_02_GLM_auc <- auc(Model_02_GLM_roc)
+Model_02_GLM_ci_value <- ci.auc(Model_02_GLM_roc)
+
+# 打印结果
+print(paste("AUC:", round(Model_02_GLM_auc, 3)))
+print(paste("95% CI:", round(Model_02_GLM_ci_value[1], 3), "-", round(Model_02_GLM_ci_value[3], 3)))
+
+```
+
+
+## 3.3 Model_03_SVM calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+Model_03_SVM$predicted <- factor(Model_03_SVM$predicted, levels = c(0, 1))
+Model_03_SVM$actual <- factor(Model_03_SVM$actual, levels = c(1, 0))
+
+# # 计算混淆矩阵
+# Model_03_SVM_conf_matrix <- confusionMatrix(Model_03_SVM$predicted, Model_03_SVM$actual)
+# 
+# # 计算准确率
+# Model_03_SVM_accuracy <- Model_03_SVM_conf_matrix$overall['Accuracy']
+# 
+# # 计算AUC
+# Model_03_SVM_auc <- roc(Model_03_SVM$actual, Model_03_SVM$predicted_prob)$auc
+# 
+# # 计算阳性预测值（PPV）
+# Model_03_SVM_ppv <- Model_03_SVM_conf_matrix$byClass['Pos Pred Value']
+# 
+# # 计算阴性预测值（NPV）
+# Model_03_SVM_npv <- Model_03_SVM_conf_matrix$byClass['Neg Pred Value']
+# 
+# # 计算敏感性（Sensitivity）
+# Model_03_SVM_sensitivity <- Model_03_SVM_conf_matrix$byClass['Sensitivity']
+# 
+# # 计算特异性（Specificity）
+# Model_03_SVM_specificity <- Model_03_SVM_conf_matrix$byClass['Specificity']
+# 
+# # Benign and Malignant count
+# Model_03_SVM_count <- table(Model_03_SVM$actual)
+# 
+# # 打印结果
+# print(paste("Accuracy:", round(Model_03_SVM_accuracy, 3)))
+# print(paste("AUC:", round(Model_03_SVM_auc, 3)))
+# print(paste("PPV:", round(Model_03_SVM_ppv, 3)))
+# print(paste("NPV:", round(Model_03_SVM_npv, 3)))
+# print(paste("Sensitivity:", round(Model_03_SVM_sensitivity, 3)))
+# print(paste("Specificity:", round(Model_03_SVM_specificity, 3)))
+# print(paste("Benign:", Model_03_SVM_count[1]))
+# print(paste("Malignant:", Model_03_SVM_count[2]))
+
+Model_03_SVM_roc <- roc(Model_03_SVM$actual, Model_03_SVM$predicted_prob)
+Model_03_SVM_auc <- auc(Model_03_SVM_roc)
+Model_03_SVM_ci_value <- ci.auc(Model_03_SVM_roc)
+
+# 打印结果
+print(paste("AUC:", round(Model_03_SVM_auc, 3)))
+print(paste("95% CI:", round(Model_03_SVM_ci_value[1], 3), "-", round(Model_03_SVM_ci_value[3], 3)))
+
+```
+
+
+## 3.4 Model_04_RFC calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+Model_04_RFC$predicted <- factor(Model_04_RFC$predicted, levels = c(0, 1))
+Model_04_RFC$actual <- factor(Model_04_RFC$actual, levels = c(1, 0))
+
+# # 计算混淆矩阵
+# Model_04_RFC_conf_matrix <- confusionMatrix(Model_04_RFC$predicted, Model_04_RFC$actual)
+# 
+# # 计算准确率
+# Model_04_RFC_accuracy <- Model_04_RFC_conf_matrix$overall['Accuracy']
+# 
+# # 计算AUC
+# Model_04_RFC_auc <- roc(Model_04_RFC$actual, Model_04_RFC$predicted_prob)$auc
+# 
+# # 计算阳性预测值（PPV）
+# Model_04_RFC_ppv <- Model_04_RFC_conf_matrix$byClass['Pos Pred Value']
+# 
+# # 计算阴性预测值（NPV）
+# Model_04_RFC_npv <- Model_04_RFC_conf_matrix$byClass['Neg Pred Value']
+# 
+# # 计算敏感性（Sensitivity）
+# Model_04_RFC_sensitivity <- Model_04_RFC_conf_matrix$byClass['Sensitivity']
+# 
+# # 计算特异性（Specificity）
+# Model_04_RFC_specificity <- Model_04_RFC_conf_matrix$byClass['Specificity']
+# 
+# # Benign and Malignant count
+# Model_04_RFC_count <- table(Model_04_RFC$actual)
+# 
+# # 打印结果
+# print(paste("Accuracy:", round(Model_04_RFC_accuracy, 3)))
+# print(paste("AUC:", round(Model_04_RFC_auc, 3)))
+# print(paste("PPV:", round(Model_04_RFC_ppv, 3)))
+# print(paste("NPV:", round(Model_04_RFC_npv, 3)))
+# print(paste("Sensitivity:", round(Model_04_RFC_sensitivity, 3)))
+# print(paste("Specificity:", round(Model_04_RFC_specificity, 3)))
+# print(paste("Benign:", Model_04_RFC_count[1]))
+# print(paste("Malignant:", Model_04_RFC_count[2]))
+
+Model_04_RFC_roc <- roc(Model_04_RFC$actual, Model_04_RFC$predicted_prob)
+Model_04_RFC_auc <- auc(Model_04_RFC_roc)
+Model_04_RFC_ci_value <- ci.auc(Model_04_RFC_roc)
+
+# 打印结果
+print(paste("AUC:", round(Model_04_RFC_auc, 3)))
+print(paste("95% CI:", round(Model_04_RFC_ci_value[1], 3), "-", round(Model_04_RFC_ci_value[3], 3)))
+
+```
+
+
+## 3.5 Model_07_XGBoost calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+Model_07_XGBoost$predicted <- factor(Model_07_XGBoost$predicted, levels = c(0, 1))
+Model_07_XGBoost$actual <- factor(Model_07_XGBoost$actual, levels = c(1, 0))
+
+# # 计算混淆矩阵
+# Model_07_XGBoost_conf_matrix <- confusionMatrix(Model_07_XGBoost$predicted, Model_07_XGBoost$actual)
+# 
+# # 计算准确率
+# Model_07_XGBoost_accuracy <- Model_07_XGBoost_conf_matrix$overall['Accuracy']
+# 
+# # 计算AUC
+# Model_07_XGBoost_auc <- roc(Model_07_XGBoost$actual, Model_07_XGBoost$predicted_prob)$auc
+# 
+# # 计算阳性预测值（PPV）
+# Model_07_XGBoost_ppv <- Model_07_XGBoost_conf_matrix$byClass['Pos Pred Value']
+# 
+# # 计算阴性预测值（NPV）
+# Model_07_XGBoost_npv <- Model_07_XGBoost_conf_matrix$byClass['Neg Pred Value']
+# 
+# # 计算敏感性（Sensitivity）
+# Model_07_XGBoost_sensitivity <- Model_07_XGBoost_conf_matrix$byClass['Sensitivity']
+# 
+# # 计算特异性（Specificity）
+# Model_07_XGBoost_specificity <- Model_07_XGBoost_conf_matrix$byClass['Specificity']
+# 
+# # Benign and Malignant count
+# Model_07_XGBoost_count <- table(Model_07_XGBoost$actual)
+
+# # 打印结果
+# print(paste("Accuracy:", round(Model_07_XGBoost_accuracy, 3)))
+# print(paste("AUC:", round(Model_07_XGBoost_auc, 3)))
+# print(paste("PPV:", round(Model_07_XGBoost_ppv, 3)))
+# print(paste("NPV:", round(Model_07_XGBoost_npv, 3)))
+# print(paste("Sensitivity:", round(Model_07_XGBoost_sensitivity, 3)))
+# print(paste("Specificity:", round(Model_07_XGBoost_specificity, 3)))
+# print(paste("Benign:", Model_07_XGBoost_count[1]))
+# print(paste("Malignant:", Model_07_XGBoost_count[2]))
+
+Model_07_XGBoost_roc <- roc(Model_07_XGBoost$actual, Model_07_XGBoost$predicted_prob)
+Model_07_XGBoost_auc <- auc(Model_07_XGBoost_roc)
+Model_07_XGBoost_ci_value <- ci.auc(Model_07_XGBoost_roc)
+
+# 打印结果
+print(paste("AUC:", round(Model_07_XGBoost_auc, 3)))
+print(paste("95% CI:", round(Model_07_XGBoost_ci_value[1], 3), "-", round(Model_07_XGBoost_ci_value[3], 3)))
+
+```
+
+
+## 3.6 Model_08_LightGBM calculate Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# 将 predicted 和 actual 转换为因子并使用相同的水平
+Model_08_LightGBM$predicted <- factor(Model_08_LightGBM$predicted, levels = c(0, 1))
+Model_08_LightGBM$actual <- factor(Model_08_LightGBM$actual, levels = c(1, 0))
+
+Model_08_LightGBM_roc <- roc(Model_08_LightGBM$actual, Model_08_LightGBM$predicted_prob)
+Model_08_LightGBM_auc <- auc(Model_08_LightGBM_roc)
+Model_08_LightGBM_ci_value <- ci.auc(Model_08_LightGBM_roc)
+
+# 打印结果
+print(paste("AUC:", round(Model_08_LightGBM_auc, 3)))
+print(paste("95% CI:", round(Model_08_LightGBM_ci_value[1], 3), "-", round(Model_08_LightGBM_ci_value[3], 3)))
+
+```
+
+## 3.11 Mean of Accuracy, AUC, PPV, NPV, Sensitivity and Specificity
+```{r}
+# # mean_accuracy <- sum(cv1_accuracy, cv2_accuracy, cv3_accuracy, cv4_accuracy, cv5_accuracy, cv6_accuracy, cv7_accuracy, cv8_accuracy, cv9_accuracy, cv10_accuracy)/10
+# mean_accuracy <- sum(cv1_accuracy, cv2_accuracy, cv3_accuracy, cv4_accuracy, cv5_accuracy, cv6_accuracy)/6
+# 
+# #mean_auc <- sum(cv1_auc, cv2_auc, cv3_auc, cv4_auc, cv5_auc, cv6_auc, cv7_auc, cv8_auc, cv9_auc, cv10_auc)/10
+# mean_auc <- sum(cv1_auc, cv2_auc, cv3_auc, cv4_auc, cv5_auc, cv6_auc)/6
+# 
+# #mean_ppv <- sum(cv1_ppv, cv2_ppv, cv3_ppv, cv4_ppv, cv5_ppv, cv6_ppv, cv7_ppv, cv8_ppv, cv9_ppv, cv10_ppv)/10
+# mean_ppv <- sum(cv1_ppv, cv2_ppv, cv3_ppv, cv4_ppv, cv5_ppv, cv6_ppv)/6
+# 
+# #mean_npv <- sum(cv1_npv, cv2_npv, cv3_npv, cv4_npv, cv5_npv, cv6_npv, cv7_npv, cv8_npv, cv9_npv, cv10_npv)/10
+# mean_npv <- sum(cv1_npv, cv2_npv, cv3_npv, cv4_npv, cv5_npv, cv6_npv)/6
+# 
+# #mean_sensitivity <- sum(cv1_sensitivity, cv2_sensitivity, cv3_sensitivity, cv4_sensitivity, cv5_sensitivity, cv6_sensitivity, cv7_sensitivity, cv8_sensitivity, cv9_sensitivity, cv10_sensitivity)/10
+# 
+# mean_sensitivity <- sum(cv1_sensitivity, cv2_sensitivity, cv3_sensitivity, cv4_sensitivity, cv5_sensitivity, cv6_sensitivity)/6
+# 
+# # mean_specificity <- sum(cv1_specificity, cv2_specificity, cv3_specificity, cv4_specificity, cv5_specificity, cv6_specificity, cv7_specificity, cv8_specificity, cv9_specificity, cv10_specificity)/10
+# mean_specificity <- sum(cv1_specificity, cv2_specificity, cv3_specificity, cv4_specificity, cv5_specificity, cv6_specificity)/6
+# 
+# # sum_count_1 <- sum(cv1_count[1], cv2_count[1], cv3_count[1], cv4_count[1], cv5_count[1], cv6_count[1], cv7_count[1], cv8_count[1], cv9_count[1], cv10_count[1])
+# sum_count_1 <- sum(cv1_count[1], cv2_count[1], cv3_count[1], cv4_count[1], cv5_count[1], cv6_count[1])
+# 
+# # sum_count_2 <- sum(cv1_count[2], cv2_count[2], cv3_count[2], cv4_count[2], cv5_count[2], cv6_count[2], cv7_count[2], cv8_count[2], cv9_count[2], cv10_count[2])
+# sum_count_2 <- sum(cv1_count[2], cv2_count[2], cv3_count[2], cv4_count[2], cv5_count[2], cv6_count[2])
+# 
+# # 打印结果
+# print(paste("Accuracy:", round(mean_accuracy, 3)))
+# print(paste("AUC:", round(mean_auc, 3)))
+# print(paste("PPV:", round(mean_ppv, 3)))
+# print(paste("NPV:", round(mean_npv, 3)))
+# print(paste("Sensitivity:", round(mean_sensitivity, 3)))
+# print(paste("Specificity:", round(mean_specificity, 3)))
+# print(paste("Benign:", sum_count_1))
+# print(paste("Malignant:", sum_count_2))
+
+```
+
+
+# 4. ROC
+## 4.1 prediction and performance
+```{r}
+# Model_20_DLA
+# 创建ROCR预测对象
+pred_Model_20_DLA <- prediction(Model_20_DLA$predicted_prob, Model_20_DLA$actual)
+# 计算AUC
+perf_auc_Model_20_DLA <- performance(pred_Model_20_DLA, "auc")
+auc_Model_20_DLA <- as.numeric(performance(pred_Model_20_DLA, "auc")@y.values)
+slotNames(perf_auc_Model_20_DLA)
+# 创建ROC曲线
+perf_roc_Model_20_DLA <- performance(pred_Model_20_DLA, measure = "tpr", x.measure = "fpr")
+
+# Model_02_GLM
+pred_Model_02_GLM <- prediction(Model_02_GLM$predicted_prob, Model_02_GLM$actual)
+perf_auc_Model_02_GLM <- performance(pred_Model_02_GLM, "auc")
+auc_Model_02_GLM <- as.numeric(performance(pred_Model_02_GLM, "auc")@y.values)
+perf_roc_Model_02_GLM <- performance(pred_Model_02_GLM, measure = "tpr", x.measure = "fpr")
+
+# Model_03_SVM
+pred_Model_03_SVM <- prediction(Model_03_SVM$predicted_prob, Model_03_SVM$actual)
+perf_auc_Model_03_SVM <- performance(pred_Model_03_SVM, "auc")
+auc_Model_03_SVM <- as.numeric(performance(pred_Model_03_SVM, "auc")@y.values)
+perf_roc_Model_03_SVM <- performance(pred_Model_03_SVM, measure = "tpr", x.measure = "fpr")
+
+# Model_04_RFC
+pred_Model_04_RFC <- prediction(Model_04_RFC$predicted_prob, Model_04_RFC$actual)
+perf_auc_Model_04_RFC <- performance(pred_Model_04_RFC, "auc")
+auc_Model_04_RFC <- as.numeric(performance(pred_Model_04_RFC, "auc")@y.values)
+perf_roc_Model_04_RFC <- performance(pred_Model_04_RFC, measure = "tpr", x.measure = "fpr")
+
+# Model_07_XGBoost
+pred_Model_07_XGBoost <- prediction(Model_07_XGBoost$predicted_prob, Model_07_XGBoost$actual)
+perf_auc_Model_07_XGBoost <- performance(pred_Model_07_XGBoost, "auc")
+auc_Model_07_XGBoost <- as.numeric(performance(pred_Model_07_XGBoost, "auc")@y.values)
+perf_roc_Model_07_XGBoost <- performance(pred_Model_07_XGBoost, measure = "tpr", x.measure = "fpr")
+
+# Model_08_LightGBM
+pred_Model_08_LightGBM <- prediction(Model_08_LightGBM$predicted_prob, Model_08_LightGBM$actual)
+perf_auc_Model_08_LightGBM <- performance(pred_Model_08_LightGBM, "auc")
+auc_Model_08_LightGBM <- as.numeric(performance(pred_Model_08_LightGBM, "auc")@y.values)
+perf_roc_Model_08_LightGBM <- performance(pred_Model_08_LightGBM, measure = "tpr", x.measure = "fpr")
+
+# # cv7
+# pred_cv7 <- prediction(cv7$predicted_prob, cv7$actual)
+# perf_auc_cv7 <- performance(pred_cv7, "auc")
+# auc_cv7 <- as.numeric(performance(pred_cv7, "auc")@y.values)
+# perf_roc_cv7 <- performance(pred_cv7, measure = "tpr", x.measure = "fpr")
+# 
+# # cv8
+# pred_cv8 <- prediction(cv8$predicted_prob, cv8$actual)
+# perf_auc_cv8 <- performance(pred_cv8, "auc")
+# auc_cv8 <- as.numeric(performance(pred_cv8, "auc")@y.values)
+# perf_roc_cv8 <- performance(pred_cv8, measure = "tpr", x.measure = "fpr")
+# 
+# # cv9
+# pred_cv9 <- prediction(cv9$predicted_prob, cv9$actual)
+# perf_auc_cv9 <- performance(pred_cv9, "auc")
+# auc_cv9 <- as.numeric(performance(pred_cv9, "auc")@y.values)
+# perf_roc_cv9 <- performance(pred_cv9, measure = "tpr", x.measure = "fpr")
+# 
+# # Model_20_DLA0
+# pred_Model_20_DLA0 <- prediction(Model_20_DLA0$predicted_prob, Model_20_DLA0$actual)
+# perf_auc_Model_20_DLA0 <- performance(pred_Model_20_DLA0, "auc")
+# auc_Model_20_DLA0 <- as.numeric(performance(pred_Model_20_DLA0, "auc")@y.values)
+# perf_roc_Model_20_DLA0 <- performance(pred_Model_20_DLA0, measure = "tpr", x.measure = "fpr")
+
+```
+
+## 4.2 plot1
+```{r}
+# 创建数据框并添加标识列
+df1 <- tibble(x = perf_roc_Model_20_DLA@x.values[[1]], y = perf_roc_Model_20_DLA@y.values[[1]], dataset = "GC-AIA")
+
+df2 <- tibble(x = perf_roc_Model_02_GLM@x.values[[1]], y = perf_roc_Model_02_GLM@y.values[[1]], dataset = "GLM")
+
+df3 <- tibble(x = perf_roc_Model_03_SVM@x.values[[1]], y = perf_roc_Model_03_SVM@y.values[[1]], dataset = "SVM")
+
+df4 <- tibble(x = perf_roc_Model_04_RFC@x.values[[1]], y = perf_roc_Model_04_RFC@y.values[[1]], dataset = "RF")
+
+df5 <- tibble(x = perf_roc_Model_07_XGBoost@x.values[[1]], y = perf_roc_Model_07_XGBoost@y.values[[1]], dataset = "XGBoost")
+
+df6 <- tibble(x = perf_roc_Model_08_LightGBM@x.values[[1]], y = perf_roc_Model_08_LightGBM@y.values[[1]], dataset = "LightGBM")
+
+combined_df <- bind_rows(df1, df2, df3, df4, df5, df6)
+
+combined_df$dataset=factor(combined_df$dataset, levels=c('GLM', 'SVM', 'RF', 'XGBoost', 'LightGBM', 'GC-AIA'))
+
+pdf('20240926_01_Training_Dataset_ROC_v1.pdf', width = 8, height = 6)
+# 绘制图形
+ggplot(combined_df, aes(x = x, y = y, color = dataset)) + 
+  geom_line(linetype = "solid", linewidth = 1) +
+  theme_bw() +
+  labs(color="Models", x="False Positive Rate", y="True Positive Rate", fill = "CV", title = "") + 
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold"))+
+  scale_color_manual(values = c('#2C73D2', '#FF8066', '#01a0a7', '#75c8cc', '#d5b26c', '#d62a56'))+
+  geom_text(aes(x=0.51, y=0, 
+                label=paste0("GC-AIA, ", 
+                             perf_auc_Model_20_DLA@y.values[[1]] %>% 
+                               round(3),
+                             " (",
+                             round(Model_20_DLA_ci_value[1], 3),
+                             "-",
+                             round(Model_20_DLA_ci_value[3], 3),
+                             ")"
+                             )), 
+            hjust="left", vjust="bottom", size=5, color="black")+
+  geom_text(aes(x=0.51, y=0.08, 
+                label=paste0("LightGBM, ", 
+                             perf_auc_Model_08_LightGBM@y.values[[1]] %>% 
+                               round(3),
+                             " (",
+                             round(Model_08_LightGBM_ci_value[1], 3),
+                             "-",
+                             round(Model_08_LightGBM_ci_value[3], 3),
+                             ")"
+                             )), 
+            hjust="left", vjust="bottom", size=5, color="black")+
+  geom_text(aes(x=0.51, y=0.16, 
+                label=paste0("XGBoost, ", 
+                             perf_auc_Model_07_XGBoost@y.values[[1]] %>% 
+                               round(3),
+                             " (",
+                             round(Model_07_XGBoost_ci_value[1], 3),
+                             "-",
+                             round(Model_07_XGBoost_ci_value[3], 3),
+                             ")"
+                             )), 
+            hjust="left", vjust="bottom", size=5, color="black")+
+  geom_text(aes(x=0.51, y=0.24, 
+                label=paste0("RF, ", 
+                             perf_auc_Model_04_RFC@y.values[[1]] %>% 
+                               round(3),
+                             " (",
+                             round(Model_04_RFC_ci_value[1], 3),
+                             "-",
+                             round(Model_04_RFC_ci_value[3], 3),
+                             ")"
+                             )), 
+            hjust="left", vjust="bottom", size=5, color="black")+
+  geom_text(aes(x=0.51, y=0.32, 
+                label=paste0("SVM, ", 
+                             perf_auc_Model_03_SVM@y.values[[1]] %>% 
+                               round(3),
+                             " (",
+                             round(Model_03_SVM_ci_value[1], 3),
+                             "-",
+                             round(Model_03_SVM_ci_value[3], 3),
+                             ")"
+                             )), 
+            hjust="left", vjust="bottom", size=5, color="black")+
+  geom_text(aes(x=0.51, y=0.40, 
+                label=paste0("GLM, ", 
+                             perf_auc_Model_02_GLM@y.values[[1]] %>% 
+                               round(3),
+                             " (",
+                             round(Model_02_GLM_ci_value[1], 3),
+                             "-",
+                             round(Model_02_GLM_ci_value[3], 3),
+                             ")"
+                             )), 
+            hjust="left", vjust="bottom", size=5, color="black")+
+  geom_text(aes(x=0.48, y=0.48, 
+                label=paste0("Models, AUC (95% CI)")), 
+            hjust="left", vjust="bottom", size=5, color="black")+
+  theme(axis.text.x = element_text(color="black", size=20),
+        axis.text.y = element_text(color="black", size=20),
+        axis.title.x = element_text( color="black", size=20),
+        axis.title.y = element_text(color="black", size=20))
+dev.off()
+
+```
+
+## 4.3 plot2
+```{r}
+pdf('20240926_01_Training_Dataset_ROC_v2.pdf', width = 8, height = 6)
+
+ggplot(combined_df, aes(x = x, y = y, color = dataset)) + 
+  geom_line(linetype = "solid", linewidth = 1) +
+  theme_bw() +
+  labs(color="Models", x="False Positive Rate", y="True Positive Rate", fill = "CV", title = "") + 
+  theme(legend.position = "NA",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 15),
+        axis.title = element_text(face = "bold")) +
+  scale_color_manual(values = c('#2C73D2', '#FF8066', '#01a0a7', '#75c8cc', '#d5b26c', '#d62a56')) +
+  
+  # GLM 文本和颜色线
+  geom_segment(aes(x = 0.50, y = 0.415, xend = 0.45, yend = 0.415), color = "#2C73D2", size = 1) +
+  geom_text(aes(x = 0.51, y = 0.40, 
+                label = paste0("GLM, ", 
+                               perf_auc_Model_02_GLM@y.values[[1]] %>% round(3),
+                               " (",
+                               round(Model_02_GLM_ci_value[1], 3),
+                               "-",
+                               round(Model_02_GLM_ci_value[3], 3),
+                               ")")), 
+            hjust = "left", vjust = "bottom", size = 5, color = "black") +
+
+  # SVM 文本和颜色线
+  geom_segment(aes(x = 0.50, y = 0.335, xend = 0.45, yend = 0.335), color = "#FF8066", size = 1) +
+  geom_text(aes(x = 0.51, y = 0.32, 
+                label = paste0("SVM, ", 
+                               perf_auc_Model_03_SVM@y.values[[1]] %>% round(3),
+                               " (",
+                               round(Model_03_SVM_ci_value[1], 3),
+                               "-",
+                               round(Model_03_SVM_ci_value[3], 3),
+                               ")")), 
+            hjust = "left", vjust = "bottom", size = 5, color = "black") +
+
+  # RF 文本和颜色线
+  geom_segment(aes(x = 0.50, y = 0.255, xend = 0.45, yend = 0.255), color = "#01a0a7", size = 1) +
+  geom_text(aes(x = 0.51, y = 0.24, 
+                label = paste0("RF, ", 
+                               perf_auc_Model_04_RFC@y.values[[1]] %>% round(3),
+                               " (",
+                               round(Model_04_RFC_ci_value[1], 3),
+                               "-",
+                               round(Model_04_RFC_ci_value[3], 3),
+                               ")")), 
+            hjust = "left", vjust = "bottom", size = 5, color = "black") +
+
+  # XGBoost 文本和颜色线
+  geom_segment(aes(x = 0.50, y = 0.175, xend = 0.45, yend = 0.175), color = "#75c8cc", size = 1) +
+  geom_text(aes(x = 0.51, y = 0.16, 
+                label = paste0("XGBoost, ", 
+                               perf_auc_Model_07_XGBoost@y.values[[1]] %>% round(3),
+                               " (",
+                               round(Model_07_XGBoost_ci_value[1], 3),
+                               "-",
+                               round(Model_07_XGBoost_ci_value[3], 3),
+                               ")")), 
+            hjust = "left", vjust = "bottom", size = 5, color = "black") +
+
+  # LightGBM 文本和颜色线
+  geom_segment(aes(x = 0.50, y = 0.095, xend = 0.45, yend = 0.095), color = "#d5b26c", size = 1) +
+  geom_text(aes(x = 0.51, y = 0.08, 
+                label = paste0("LightGBM, ", 
+                               perf_auc_Model_08_LightGBM@y.values[[1]] %>% round(3),
+                               " (",
+                               round(Model_08_LightGBM_ci_value[1], 3),
+                               "-",
+                               round(Model_08_LightGBM_ci_value[3], 3),
+                               ")")), 
+            hjust = "left", vjust = "bottom", size = 5, color = "black") +
+
+  # GC-AIA 文本和颜色线
+  geom_segment(aes(x = 0.50, y = 0.015, xend = 0.45, yend = 0.015), color = "#d62a56", size = 1) +
+  geom_text(aes(x = 0.51, y = 0, 
+                label = paste0("GC-AIA, ", 
+                               perf_auc_Model_20_DLA@y.values[[1]] %>% round(3),
+                               " (",
+                               round(Model_20_DLA_ci_value[1], 3),
+                               "-",
+                               round(Model_20_DLA_ci_value[3], 3),
+                               ")")), 
+            hjust = "left", vjust = "bottom", size = 5, color = "black") +
+  
+  geom_text(aes(x=0.48, y=0.48, 
+                label=paste0("Models, AUC (95% CI)")), 
+            hjust="left", vjust="bottom", size=5, color="black")+
+  
+  theme(axis.text.x = element_text(color = "black", size = 20),
+        axis.text.y = element_text(color = "black", size = 20),
+        axis.title.x = element_text(color = "black", size = 20),
+        axis.title.y = element_text(color = "black", size = 20))
+
+
+dev.off()
+
+```
+

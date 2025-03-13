@@ -1,0 +1,511 @@
+---
+html_document: default
+author: "Wei"
+date: '2024-09-26'
+output:
+  html_document:
+    df_print: paged
+title: "receiver operating characteristic curve (ROC curve)"
+---
+
+# 1. loading library and function
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ROCR))
+suppressPackageStartupMessages(library(pROC))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(ggbeeswarm))
+suppressPackageStartupMessages(library(pacman))
+pacman::p_load(tidyverse,ggpubr,rstatix,ggsci,ggsignif,reshape2)
+suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(pheatmap))
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+
+# 2. loading data
+```{r}
+Clinical <- read_rds("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/31_Clinical_information/GC_Clinical_info_20240925.rds")
+
+data_feature <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/00_backup/20240618-all-features.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(data_feature)[colnames(data_feature)=="GCID"] <- "Sample"
+
+cv1 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv1.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv1)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv2 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv2.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv2)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv3 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv3.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv3)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv4 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv4.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv4)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv5 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv5.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv5)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv6 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv6.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv6)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv7 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv7.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv7)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv8 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv8.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv8)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv9 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv9.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv9)<-c("predicted", "predicted_prob", "actual", "Sample")
+cv10 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/cv10.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(cv10)<-c("predicted", "predicted_prob", "actual", "Sample")
+Training_dataset <- bind_rows(cv1, cv2, cv3, cv4, cv5, cv6, cv7, cv8, cv9, cv10)
+
+IVD_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/Internal_val.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(IVD_data) <- c("predicted", "predicted_prob", "actual", "Sample")
+EVD_data <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/External_val.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(EVD_data) <- c("predicted", "predicted_prob", "actual", "Sample")
+join_data <- bind_rows(Training_dataset, IVD_data, EVD_data) %>% 
+  distinct()
+
+```
+
+
+# 3. data processed
+## 3.1 join
+```{r}
+join_data_Clinical <- join_data %>% 
+  left_join(Clinical, by = c("Sample" = "Sample")) %>% 
+  dplyr::mutate(Group_predicted = case_when(predicted == 0 ~ "Non-GC",
+                                            predicted == 1 ~ "GC",
+                                  )) %>% 
+  distinct()
+
+join_data_feature <- join_data_Clinical %>%
+  left_join(data_feature, by = c("Sample" = "Sample")) %>%
+  distinct()
+
+```
+
+
+## 3.2 calculate wilcox between Non-GC and GC, and select significant features 
+```{r}
+data_feature_all <- join_data_feature %>% 
+  select(Group_predicted, F1:F8716)
+# write.table(test_join_data_feature, "test_join_data_feature.txt", sep = "\t", row.names = F)
+
+# 获取除了'Group_predicted'之外的所有列名
+features <- setdiff(names(data_feature_all), "Group_predicted")
+
+# 初始化一个空的数据框来存储结果
+data_feature_wilcox <- data.frame(Feature = character(),
+                                  P_Value = numeric(),
+                                  Median_NonGC = numeric(),
+                                  Median_GC = numeric(),
+                                  stringsAsFactors = FALSE)
+
+# 遍历每个特征进行Wilcoxon检验
+for (feature in features) {
+    # 选择Non-GC和GC组的数据
+    group_NonGC <- data_feature_all[data_feature_all$Group_predicted == "Non-GC", feature]
+    group_GC <- data_feature_all[data_feature_all$Group_predicted == "GC", feature]
+    
+    # 计算中位数
+    median_NonGC <- median(group_NonGC, na.rm = TRUE)
+    median_GC <- median(group_GC, na.rm = TRUE)
+
+    # 进行Wilcoxon秩和检验
+    test_result <- wilcox.test(group_NonGC, group_GC, exact = FALSE)
+
+    # 保存结果到数据框
+    data_feature_wilcox <- rbind(data_feature_wilcox, data.frame(Feature = feature,
+                                         P_Value = test_result$p.value,
+                                         Median_NoGC = median_NonGC,
+                                         Median_GC = median_GC,
+                                         Fold_Change = median_NonGC/median_GC))
+}
+
+
+data_feature_wilcox2 <- data_feature_wilcox %>% 
+  filter(P_Value < 0.001) %>% 
+  arrange(P_Value)
+
+
+write.csv(data_feature_wilcox2, "data_feature_wilcox.csv", row.names = FALSE, col.names = TRUE)
+
+```
+
+
+# 10. End Motif (Top 100 features)
+## 10.1 colname
+```{r}
+EndMotif <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/Feature_names.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(EndMotif) <- c("Feature_num", "Feature_chr", "Type")
+
+EndMotif2 <- EndMotif %>% 
+  filter(Type == "Endmotif")
+
+```
+
+## 10.2 data_Endmotif
+```{r}
+# join_data_feature %>%
+#   group_by(OS_time) %>%
+#   summarise(count = n())
+
+data_Endmotif <- join_data_feature %>% 
+  dplyr::select(Group_predicted, F1285, F1366, F1468, F1337, F1251, F1411)
+colnames(data_Endmotif) <- c("Group_predicted", "CACT", "GCGC", "TTTT", "CTTA", "AGCC", "TACG")
+
+# write.table(data_Endmotif, "data_Endmotif.txt", sep = "\t", row.names = F)
+
+```
+
+
+# 11. data_Endmotif plot
+```{r}
+summary(data_Endmotif[data_Endmotif$Group_predicted=="Non-GC",]$CACT)
+summary(data_Endmotif[data_Endmotif$Group_predicted=="GC",]$CACT)
+p <- wilcox.test(data_Endmotif[data_Endmotif$Group_predicted=="Non-GC",]$CACT, data_Endmotif[data_Endmotif$Group_predicted=="GC",]$CACT)
+p$p.value
+
+# Reshape data from wide to long format
+data_long <- pivot_longer(data_Endmotif, cols = c(CACT, GCGC, TTTT, CTTA, AGCC, TACG), names_to = "Measure", values_to = "Value")
+
+# Create a new factor to control the order of the x-axis
+data_long$Group_Order <- factor(interaction(data_long$Measure, data_long$Group_predicted),
+                                levels = c("CACT.Non-GC", "CACT.GC", 
+                                           "GCGC.Non-GC", "GCGC.GC", 
+                                           "TTTT.Non-GC", "TTTT.GC", 
+                                           "CTTA.Non-GC", "CTTA.GC", 
+                                           "AGCC.Non-GC", "AGCC.GC", 
+                                           "TACG.Non-GC", "TACG.GC"))
+
+# Create a list for pairwise comparisons
+comparison_list <- list(c("CACT.Non-GC", "CACT.GC"), 
+                        c("GCGC.Non-GC", "GCGC.GC"),
+                        c("TTTT.Non-GC", "TTTT.GC"), 
+                        c("CTTA.Non-GC", "CTTA.GC"),
+                        c("AGCC.Non-GC", "AGCC.GC"), 
+                        c("TACG.Non-GC", "TACG.GC"))
+
+pdf("20240926_cfDNA_10_Endmotif_boxplot_v1.pdf", height=4, width=10)
+# Plot
+ggplot(data_long, aes(x = Group_Order, y = Value, fill = Group_predicted)) +
+  geom_boxplot(width = 0.4, size = 1) +
+  # geom_quasirandom(width = 0.1, varwidth = TRUE, cex = 2, method = "quasirandom")+
+  geom_signif(comparisons = comparison_list, 
+              test = "wilcox.test",
+              map_signif_level = TRUE) +
+  stat_summary(fun = median, geom = "text", 
+               aes(label = sprintf("%0.3f", after_stat(y))),
+               vjust = 0.5, hjust = -0.5, color = "black", size = 4) + 
+  theme_classic() +
+  theme(legend.position = "NA") +
+  labs(title = "", x = NULL, y = "Frequencies (%)", fill = "") +
+  scale_fill_manual(values = c("Non-GC" = "#007fff", "GC" = "#ff8033")) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, face = "bold", color = "black", size = 12),
+        axis.text.y = element_text(face = "bold", color = "black", size = 12),
+        axis.title.x = element_text(face = "bold", color = "black", size = 12),
+        axis.title.y = element_text(face = "bold", color = "black", size = 12),
+        # legend.position = "none",
+        panel.grid = element_blank(),
+        axis.line = element_line(linewidth = 0.5, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.5, colour = "black"), axis.ticks.length = unit(0.5, "lines")) +
+  scale_x_discrete(labels = function(x) gsub("\\.Non-GC|\\.GC", "", x))  # Simplify x-axis labels
+dev.off()
+
+```
+
+
+# 20. Break Point (Top 100 features)
+## 20.1 colname
+```{r}
+Breakpoint <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/Feature_names.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(Breakpoint) <- c("Feature_num", "Feature_chr", "Type")
+
+Breakpoint2 <- Breakpoint %>% 
+  filter(Type == "Breakpoint")
+
+```
+
+## 20.2 data_Breakpoint
+```{r}
+# join_data_feature %>%
+#   group_by(OS_time) %>%
+#   summarise(count = n())
+
+data_Breakpoint <- join_data_feature %>% 
+  dplyr::select(Group_predicted, F1207, F1206)
+colnames(data_Breakpoint) <- c("Group_predicted", "GCACTT", "GCAGTA")
+
+# write.table(data_Breakpoint, "data_Breakpoint.txt", sep = "\t", row.names = F)
+
+```
+
+
+# 21. data_Breakpoint plot
+```{r}
+summary(data_Breakpoint[data_Breakpoint$Group_predicted=="Non-GC",]$GCACTT)
+summary(data_Breakpoint[data_Breakpoint$Group_predicted=="GC",]$GCACTT)
+p <- wilcox.test(data_Breakpoint[data_Breakpoint$Group_predicted=="Non-GC",]$GCACTT, data_Breakpoint[data_Breakpoint$Group_predicted=="GC",]$GCACTT)
+p$p.value
+
+# Reshape data from wide to long format
+data_long <- pivot_longer(data_Breakpoint, cols = c(GCACTT, GCAGTA), names_to = "Measure", values_to = "Value")
+
+# Create a new factor to control the order of the x-axis
+data_long$Group_Order <- factor(interaction(data_long$Measure, data_long$Group_predicted),
+                                levels = c("GCACTT.Non-GC", "GCACTT.GC", "GCAGTA.Non-GC", "GCAGTA.GC"))
+
+# Create a list for pairwise comparisons
+comparison_list <- list(c("GCACTT.Non-GC", "GCACTT.GC"), 
+                        c("GCAGTA.Non-GC", "GCAGTA.GC"))
+
+pdf("20240926_cfDNA_11_Breakpoint_boxplot_v1.pdf", height=4.5, width=4.5)
+# Plot
+ggplot(data_long, aes(x = Group_Order, y = Value, fill = Group_predicted)) +
+  geom_boxplot(width = 0.4, size = 1) +
+  # geom_quasirandom(width = 0.1, varwidth = TRUE, cex = 2, method = "quasirandom")+
+  geom_signif(comparisons = comparison_list, 
+              test = "wilcox.test",
+              map_signif_level = TRUE) +
+  stat_summary(fun = median, geom = "text", 
+               aes(label = sprintf("%0.3f", after_stat(y))),
+               vjust = 0.5, hjust = -0.5, color = "black", size = 4) + 
+  theme_classic() +
+  theme(legend.position = "NA") +
+  labs(title = "", x = NULL, y = "Frequencies (%)", fill = "") +
+  scale_fill_manual(values = c("Non-GC" = "#007fff", "GC" = "#ff8033")) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, face = "bold", color = "black", size = 12),
+        axis.text.y = element_text(face = "bold", color = "black", size = 12),
+        axis.title.x = element_text(face = "bold", color = "black", size = 12),
+        axis.title.y = element_text(face = "bold", color = "black", size = 12),
+        # legend.position = "none",
+        panel.grid = element_blank(),
+        axis.line = element_line(linewidth = 0.5, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.5, colour = "black"), axis.ticks.length = unit(0.5, "lines")) +
+  scale_x_discrete(labels = function(x) gsub("\\.Non-GC|\\.GC", "", x))  # Simplify x-axis labels
+dev.off()
+
+```
+
+
+# 30. Top 100 features
+## 30.1 colname
+```{r}
+feature_100 <- read.xlsx("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/Feature_names.xlsx", sheet = 1, skipEmptyRows = FALSE, colNames = TRUE)
+colnames(feature_100) <- c("Feature_num", "Feature_chr", "Type")
+# feature_100 <- read.csv("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/30_Feature/data_feature_wilcox.csv")
+# 
+# feature_100_02 <- feature_100 %>%
+#   arrange(desc(Fold_Change)) %>%
+#   slice(1:50L)
+# 
+# feature_100_03 <- feature_100 %>%
+#   arrange(Fold_Change) %>%
+#   slice(1:50L)
+# 
+# join_feature_100 <- bind_rows(feature_100_02, feature_100_03) %>%
+#   distinct()
+
+```
+
+## 30.2 data_feature_100
+```{r}
+Feature_num <- feature_100$Feature_num
+data_feature_100 <- join_data_feature %>%
+  dplyr::select(Sample, Group_predicted, feature_100$Feature_num)
+
+# Feature_num <- join_feature_100$Feature
+# data_feature_100 <- join_data_feature %>%
+#   dplyr::select(Sample, Group_predicted, join_feature_100$Feature)
+
+# write.table(data_feature_100, "data_feature_100.txt", sep = "\t", row.names = F)
+
+```
+
+
+# 31. data_feature_100 plot
+```{r}
+data_feature_100 <- data_feature_100 %>% 
+  arrange(Group_predicted)
+
+# 保存样本名称和预测组别信息，以便后续使用
+sample_info <- data_feature_100[, c("Sample", "Group_predicted")]
+
+# 计算z-score，注意排除第一列（Sample）和Group_predicted列
+# data_z <- t(scale(t(data_feature_100[, !names(data_feature_100) %in% c("Sample", "Group_predicted")])))
+data_z <- scale(data_feature_100[, !names(data_feature_100) %in% c("Sample", "Group_predicted")], scale = TRUE)
+
+# 转换回数据框，并添加样本和组别信息
+data_z <- data.frame(Sample = sample_info$Sample, 
+                     Group_predicted = sample_info$Group_predicted, 
+                     data_z)
+
+# annotation_row
+annotation_row = data.frame(
+  Group = factor(data_z$Group_predicted)
+)
+rownames(annotation_row) = data_z$Sample
+
+# annotation_colors
+ann_colors = list(
+  Group = c('Non-GC' = "#007fff", 'GC' = "#ff8033")
+)
+
+pheatmap_data_z <- data_z %>% 
+  select(-Group_predicted) %>%
+  column_to_rownames(var = "Sample")
+
+data_z$Group_predicted=factor(data_z$Group_predicted, levels=c('Non-GC', 'GC'))
+
+pdf("20240926_cfDNA_12_feature_100_pheatmap_v1.pdf", height=5, width=10)
+
+pheatmap(pheatmap_data_z, 
+         color = colorRampPalette(c("#0000cd","#FFFFFF","#ff3c00"))(100)[0:100], 
+         fontsize=9, 
+         fontsize_row=9, 
+         # display_numbers = matrix(ifelse(copper_pheatmap2 > 1, "*", ""), nrow(copper_pheatmap2)),
+         breaks = seq(-5,5,1/10), legend_breaks = seq(-5,5,2.5),
+         annotation_row = annotation_row, 
+         annotation_colors = ann_colors, 
+         cluster_rows=F, 
+         cluster_cols=T)
+dev.off()
+
+```
+
+
+# 40. index
+## 40.1 colname
+```{r}
+feature_index <- read.csv("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/data_feature_wilcox_240619.csv")
+
+feature_index2 <- feature_index %>% 
+  filter(Type == "INDEX")
+
+```
+
+## 40.2 data_index
+```{r}
+data_index <- join_data_feature %>% 
+  dplyr::select(Group_predicted, F4, F5)
+colnames(data_index) <- c("Group_predicted", "Index01", "Index02")
+
+```
+
+
+# 41. data_index plot
+```{r}
+summary(data_index[data_index$Group_predicted=="Non-GC",]$Index01)
+summary(data_index[data_index$Group_predicted=="GC",]$Index01)
+p <- wilcox.test(data_index[data_index$Group_predicted=="Non-GC",]$Index01, data_index[data_index$Group_predicted=="GC",]$Index01)
+p$p.value
+
+# Reshape data from wide to long format
+data_long <- pivot_longer(data_index, cols = c(Index01, Index02), names_to = "Measure", values_to = "Value")
+
+# Create a new factor to control the order of the x-axis
+data_long$Group_Order <- factor(interaction(data_long$Measure, data_long$Group_predicted),
+                                levels = c("Index01.Non-GC", "Index01.GC", 
+                                           "Index02.Non-GC", "Index02.GC"))
+
+# Create a list for pairwise comparisons
+comparison_list <- list(c("Index01.Non-GC", "Index01.GC"), 
+                        c("Index02.Non-GC", "Index02.GC"))
+
+data_long$Group_predicted=factor(data_long$Group_predicted, levels=c('Non-GC', 'GC'))
+
+pdf("20240926_cfDNA_13_Index_boxplot_v1.pdf", height=4.5, width=4.5)
+# Plot
+ggplot(data_long, aes(x = Group_Order, y = Value, fill = Group_predicted)) +
+  geom_boxplot(width = 0.4, size = 1) +
+  # geom_quasirandom(width = 0.1, varwidth = TRUE, cex = 2, method = "quasirandom")+
+  geom_signif(comparisons = comparison_list, 
+              test = "wilcox.test",
+              map_signif_level = TRUE) +
+  stat_summary(fun = median, geom = "text", 
+               aes(label = sprintf("%0.3f", after_stat(y))),
+               vjust = 0.5, hjust = -0.5, color = "black", size = 4) + 
+  theme_classic() +
+  # theme(legend.position = "NA") +
+  labs(title = "", x = NULL, y = "Frequencies (%)", fill = "") +
+  scale_fill_manual(values = c("Non-GC" = "#007fff", "GC" = "#ff8033")) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, face = "bold", color = "black", size = 12),
+        axis.text.y = element_text(face = "bold", color = "black", size = 12),
+        axis.title.x = element_text(face = "bold", color = "black", size = 12),
+        axis.title.y = element_text(face = "bold", color = "black", size = 12),
+        # legend.position = "none",
+        panel.grid = element_blank(),
+        axis.line = element_line(linewidth = 0.5, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.5, colour = "black"), axis.ticks.length = unit(0.5, "lines")) +
+  scale_x_discrete(labels = function(x) gsub("\\.Non-GC|\\.GC", "", x))  # Simplify x-axis labels
+dev.off()
+
+```
+
+# 50. ichorCNA
+## 50.1 colname
+```{r}
+feature_ichorCNA <- read.csv("/Users/xuewei/ZxProjects/20240408_GC_cfDNA/202409/32_AUC/Top100_features/data_feature_wilcox_240619.csv")
+
+feature_ichorCNA2 <- feature_ichorCNA %>% 
+  filter(Type == "ichorCNA")
+
+```
+
+## 50.2 data_ichorCNA
+```{r}
+data_ichorCNA <- join_data_feature %>% 
+  dplyr::select(Group_predicted, F8702, F8703)
+colnames(data_ichorCNA) <- c("Group_predicted", "CNA01", "CNA02")
+
+```
+
+
+# 51. data_ichorCNA plot
+```{r}
+summary(data_ichorCNA[data_ichorCNA$Group_predicted=="Non-GC",]$CNA02)
+summary(data_ichorCNA[data_ichorCNA$Group_predicted=="GC",]$CNA02)
+p <- wilcox.test(data_ichorCNA[data_ichorCNA$Group_predicted=="Non-GC",]$CNA02, data_ichorCNA[data_ichorCNA$Group_predicted=="GC",]$CNA02)
+p$p.value
+
+# Reshape data from wide to long format
+data_long <- pivot_longer(data_ichorCNA, cols = c(CNA01, CNA02), names_to = "Measure", values_to = "Value")
+
+# Create a new factor to control the order of the x-axis
+data_long$Group_Order <- factor(interaction(data_long$Measure, data_long$Group_predicted),
+                                levels = c("CNA01.Non-GC", "CNA01.GC", 
+                                           "CNA02.Non-GC", "CNA02.GC"))
+
+# Create a list for pairwise comparisons
+comparison_list <- list(c("CNA01.Non-GC", "CNA01.GC"), 
+                        c("CNA02.Non-GC", "CNA02.GC"))
+
+data_long$Group_predicted=factor(data_long$Group_predicted, levels=c('Non-GC', 'GC'))
+
+pdf("20240926_cfDNA_14_ichorCNA_boxplot_v1.pdf", height=4.5, width=4.5)
+# Plot
+ggplot(data_long, aes(x = Group_Order, y = Value, fill = Group_predicted)) +
+  geom_boxplot(width = 0.4, size = 1) +
+  # geom_quasirandom(width = 0.1, varwidth = TRUE, cex = 2, method = "quasirandom")+
+  geom_signif(comparisons = comparison_list, 
+              test = "wilcox.test",
+              map_signif_level = TRUE) +
+  stat_summary(fun = median, geom = "text", 
+               aes(label = sprintf("%0.3f", after_stat(y))),
+               vjust = 0.5, hjust = -0.5, color = "black", size = 4) + 
+  theme_classic() +
+  # theme(legend.position = "NA") +
+  labs(title = "", x = NULL, y = "Frequencies (%)", fill = "") +
+  scale_fill_manual(values = c("Non-GC" = "#007fff", "GC" = "#ff8033")) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, face = "bold", color = "black", size = 12),
+        axis.text.y = element_text(face = "bold", color = "black", size = 12),
+        axis.title.x = element_text(face = "bold", color = "black", size = 12),
+        axis.title.y = element_text(face = "bold", color = "black", size = 12),
+        # legend.position = "none",
+        panel.grid = element_blank(),
+        axis.line = element_line(linewidth = 0.5, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.5, colour = "black"), axis.ticks.length = unit(0.5, "lines")) +
+  scale_x_discrete(labels = function(x) gsub("\\.Non-GC|\\.GC", "", x))  # Simplify x-axis labels
+dev.off()
+
+```
+
